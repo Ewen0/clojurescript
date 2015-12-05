@@ -84,6 +84,7 @@
 
 (defn read-get [line rdr]
   (let [[_ path _] (str/split line #" ")
+        [path query-string] (str/split path #"\?")
         headers (parse-headers (read-headers rdr))]
     {:method :get
      :path path

@@ -21,6 +21,8 @@
             [goog.userAgent.product :as product]
             [clojure.browser.net :as net]
             [clojure.browser.event :as event]
+            [goog.date :as date]
+            [goog.Uri]
             ;; repl-connection callback will receive goog.require('cljs.repl')
             ;; and monkey-patched require expects to be able to derive it
             ;; via goog.basePath, so this namespace should be compiled together
@@ -122,6 +124,12 @@
 
 (def load-queue nil)
 
+(defn add-timestamp [uri]
+  (let [timestamp (.getTime (date/DateTime.))]
+    (-> (goog.Uri/parse uri)
+        (.setParameterValue "timestamp" timestamp)
+        str)))
+
 (defn bootstrap
   "Reusable browser REPL bootstrapping. Patches the essential functions
   in goog.base to support re-loading of namespaces after page load."
@@ -160,9 +168,10 @@
       (fn [src opt_sourceText]
         (if load-queue
           (.push load-queue #js [src opt_sourceText])
-          (do
+          ;; Add a timestamp to avoid cache hits
+          (let [new-src (add-timestamp src)]
             (set! load-queue #js [])
-            (js/goog.writeScriptTag__ src opt_sourceText)))))
+            (js/goog.writeScriptTag__ new-src opt_sourceText)))))
     ;; we must reuse Closure library dev time dependency management, under namespace
     ;; reload scenarios we simply delete entries from the correct private locations
     (set! (.-require js/goog)
