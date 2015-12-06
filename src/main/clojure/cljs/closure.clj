@@ -284,7 +284,7 @@
                   (map #(js-source-file (.getFile %) (slurp %)) ext))]
     (let [js-sources (-> externs filter-js add-target load-js)
           ups-sources (-> ups-externs filter-cp-js load-js)
-          all-sources (concat js-sources ups-sources)] 
+          all-sources (concat js-sources ups-sources)]
       (if use-only-custom-externs
         all-sources
         (into all-sources (CommandLineRunner/getDefaultExterns))))))
@@ -313,7 +313,7 @@
   (-source-map [this] "Return the CLJS compiler generated JS source mapping"))
 
 (extend-protocol deps/IJavaScript
-  
+
   String
   (-foreign? [this] false)
   (-closure-lib? [this] false)
@@ -321,7 +321,7 @@
   (-provides [this] (:provides (deps/parse-js-ns (string/split-lines this))))
   (-requires [this] (:requires (deps/parse-js-ns (string/split-lines this))))
   (-source [this] this)
-  
+
   clojure.lang.IPersistentMap
   (-foreign? [this] (:foreign this))
   (-closure-lib? [this] (:closure-lib this))
@@ -432,7 +432,7 @@
   returns a JavaScriptFile. In either case the return value satisfies
   IJavaScript."
   [^File file {:keys [output-file] :as opts}]
-    (if output-file 
+    (if output-file
       (let [out-file (io/file (util/output-directory opts) output-file)]
         (compiled-file (comp/compile-file file out-file opts)))
       (let [path (.getPath ^File file)]
@@ -506,17 +506,17 @@
     (case (.getProtocol this)
       "file" (-find-sources (io/file this) opts)
       "jar" (find-jar-sources this opts)))
-  
+
   clojure.lang.PersistentList
   (-compile [this opts]
     (compile-form-seq [this]))
   (-find-sources [this opts]
     [(ana/parse-ns [this] opts)])
-  
+
   String
   (-compile [this opts] (-compile (io/file this) opts))
   (-find-sources [this opts] (-find-sources (io/file this) opts))
-  
+
   clojure.lang.PersistentVector
   (-compile [this opts] (compile-form-seq this))
   (-find-sources [this opts]
@@ -1218,7 +1218,7 @@
 
   ;; optimize a ClojureScript form
   (optimize {:optimizations :simple} (-compile '(def x 3) {}))
-  
+
   ;; optimize a project
   (println (->> (-compile "samples/hello/src" {})
                 (apply add-dependencies {})
@@ -1309,30 +1309,81 @@
 
 (declare foreign-deps-str add-header add-source-map-link)
 
+(defn compute-asset-path [asset-path output-dir rel-path]
+  (let [asset-path (if asset-path (str "\"" asset-path "\"") "null")
+        output-dir (if output-dir (str "\"" output-dir "\"") "null")
+        rel-path (if rel-path (str "\"" rel-path "\"") "null")]
+    (str "(function(assetPath, outputDir, relPath) {
+          if(assetPath) {
+            return assetPath;
+          }
+          var computedAssetPath = assetPath? assetPath : outputDir;
+          if(!outputDir ||  !relPath) {
+            return computedAssetPath;
+          }
+          var endsWith = function(str, suffix) {
+            return str.indexOf(suffix, str.length - suffix.length) !== -1;
+          }
+          var origin = window.location.protocol + \"//\" + window.location.hostname + (window.location.port ? ':' + window.location.port: '');
+          var scripts = document.getElementsByTagName(\"script\");
+          for(var i = 0; i < scripts.length; ++i) {
+            var src = scripts[i].src;
+            if(src && endsWith(src, relPath)) {
+              var relPathIndex = src.indexOf(relPath);
+              var originIndex = src.indexOf(origin);
+              if(originIndex === 0) {
+                return src.substring(origin.length+1, relPathIndex);
+              }
+            }
+          }
+          return computedAssetPath;
+        })(" asset-path ", " output-dir ", " rel-path ");\n")))
+
 (defn output-main-file [opts]
-  (let [asset-path (or (:asset-path opts)
-                       (util/output-directory opts))
-        closure-defines (json/write-str (:closure-defines opts))]
+  (let [closure-defines (json/write-str (:closure-defines opts))]
     (case (:target opts)
       :nodejs
-      (output-one-file opts
-        (add-header opts
-          (str "var path = require(\"path\");\n"
-               "try {\n"
-               "    require(\"source-map-support\").install();\n"
-               "} catch(err) {\n"
-               "}\n"
-               "require(path.join(path.resolve(\".\"),\"" asset-path "\",\"goog\",\"bootstrap\",\"nodejs.js\"));\n"
-               "require(path.join(path.resolve(\".\"),\"" asset-path "\",\"cljs_deps.js\"));\n"
-               "goog.global.CLOSURE_UNCOMPILED_DEFINES = " closure-defines ";\n"
-               "goog.require(\"" (comp/munge (:main opts)) "\");\n"
-               "goog.require(\"cljs.nodejscli\");\n")))
-      (output-one-file opts
-        (str "var CLOSURE_UNCOMPILED_DEFINES = " closure-defines ";\n"
-             "if(typeof goog == \"undefined\") document.write('<script src=\"" asset-path "/goog/base.js\"></script>');\n"
-             "document.write('<script src=\"" asset-path "/cljs_deps.js\"></script>');\n"
-             "document.write('<script>if (typeof goog != \"undefined\") { goog.require(\"" (comp/munge (:main opts))
-             "\"); } else { console.warn(\"ClojureScript could not load :main, did you forget to specify :asset-path?\"); };</script>');\n")))))
+      (let [asset-path (or (:asset-path opts)
+                           (util/output-directory opts))]
+        (output-one-file
+          opts
+          (add-header
+            opts
+            (str "var path = require(\"path\");\n"
+                 "try {\n"
+                 "    require(\"source-map-support\").install();\n"
+                 "} catch(err) {\n"
+                 "}\n"
+                 "require(path.join(path.resolve(\".\"),\"" asset-path "\",\"goog\",\"bootstrap\",\"nodejs.js\"));\n"
+                 "require(path.join(path.resolve(\".\"),\"" asset-path "\",\"cljs_deps.js\"));\n"
+                 "goog.global.CLOSURE_UNCOMPILED_DEFINES = " closure-defines ";\n"
+                 "goog.require(\"" (comp/munge (:main opts)) "\");\n"
+                 "goog.require(\"cljs.nodejscli\");\n"))))
+      (let [output-dir-uri (-> (:output-dir opts) (File.) (.toURI))
+            output-to-uri (-> (:output-to opts) (File.) (.toURI))
+            output-dir-path (-> (.normalize output-dir-uri)
+                                (.toString))
+            output-to-path (-> (.normalize output-to-uri)
+                               (.toString))
+            ;; If output-dir is not a parent dir of output-to, then
+            ;; we don't try to infer the asset path because it may
+            ;; not be possible.
+            rel-path (if (and (.startsWith output-to-path
+                                           output-dir-path)
+                              (not= output-dir-path output-to-path))
+                       (-> (.relativize output-dir-uri output-to-uri)
+                           (.toString))
+                       nil)]
+        (output-one-file
+          opts
+          (str "(function() {\n"
+               "var assetPath = " (compute-asset-path (:asset-path opts) (util/output-directory opts) rel-path)
+               "var CLOSURE_UNCOMPILED_DEFINES = " closure-defines ";\n"
+               "if(typeof goog == \"undefined\") document.write('<script src=\"'+ assetPath +'/goog/base.js\"></script>');\n"
+               "document.write('<script src=\"'+ assetPath +'/cljs_deps.js\"></script>');\n"
+               "document.write('<script>if (typeof goog != \"undefined\") { goog.require(\"" (comp/munge (:main opts))
+               "\"); } else { console.warn(\"ClojureScript could not load :main, did you forget to specify :asset-path?\"); };</script>');\n"
+               "})();\n"))))))
 
 (defn output-modules
   "Given compiler options, original IJavaScript sources and a sequence of
@@ -1610,7 +1661,7 @@
       (output-deps-file opts disk-sources))))
 
 (comment
-  
+
   ;; output unoptimized alone
   (output-unoptimized {} "goog.provide('test');\ngoog.require('cljs.core');\nalert('hello');\n")
   ;; output unoptimized with all dependencies
@@ -1627,7 +1678,7 @@
   )
 
 
-(defn get-upstream-deps* 
+(defn get-upstream-deps*
   "returns a merged map containing all upstream dependencies defined
   by libraries on the classpath."
   ([]
