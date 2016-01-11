@@ -1639,6 +1639,19 @@
     (is (= '(2 3) (next (range 1 4))))
     ))
 
+(deftest test-lazy-seq-realized?
+  (testing "Testing LazySeq IPending"
+    (let [xs (lazy-seq
+               (cons 1
+                 (lazy-seq
+                   (cons 2
+                     (lazy-seq (cons 3 nil))))))]
+      (is (not (realized? xs)))
+      (is (not (realized? (rest xs))))
+      (is (realized? xs))
+      (is (not (realized? (nthrest xs 2))))
+      (is (realized? (rest xs))))))
+
 (deftest test-chunked
   (let [r (range 64)
         v (into [] r)]
@@ -1928,6 +1941,45 @@
 (defprotocol IProtocolWithDocStrings
   (-method1 [this] "some doc")
   (-method2 [this] ""))
+
+(deftest test-type
+  (is (= nil         (type nil)))
+  (is (= js/Number   (type 0)))
+  (is (= js/Number   (type js/NaN)))
+  (is (= js/Number   (type js/Infinity)))
+  (is (= js/String   (type "")))
+  (is (= js/Boolean  (type true)))
+  (is (= js/Boolean  (type false)))
+  (is (= js/Function (type identity)))
+  (is (= js/Function (type (fn [x] x))))
+  (is (= js/Object   (type (js-obj))))
+  (is (= js/Array    (type (array))))
+  (is (= js/Date     (type (js/Date.))))
+  (is (= js/Function (type js/Object))))
+
+(deftest test-instance?
+  (is (not (instance? js/Object  nil)))
+  (is (not (instance? js/Number  0)))
+  (is (not (instance? js/Number  js/NaN)))
+  (is (not (instance? js/Number  js/Infinity)))
+  (is (not (instance? js/String  "")))
+  (is (not (instance? js/Boolean true)))
+  (is (not (instance? js/Boolean false)))
+  (is (instance? js/Number   (js/Number. 0)))
+  (is (instance? js/Object   (js/Number. 0)))
+  (is (instance? js/String   (js/String. "")))
+  (is (instance? js/Object   (js/String. "")))
+  (is (instance? js/Boolean  (js/Boolean.)))
+  (is (instance? js/Object   (js/Boolean.)))
+  (is (instance? js/Function identity))
+  (is (instance? js/Object   identity))
+  (is (instance? js/Function (fn [x] x)))
+  (is (instance? js/Object   (js-obj)))
+  (is (instance? js/Array    (array)))
+  (is (instance? js/Object   (array)))
+  (is (instance? js/Date     (js/Date.)))
+  (is (instance? js/Object   (js/Date.)))
+  (is (instance? js/Function js/Object)))
 
 ;; =============================================================================
 ;; Tickets
@@ -2943,6 +2995,18 @@
   (is (= "foobar" (a-method (reify
                               IFooBar
                               (cljs.core-test/a-method [_] "foobar"))))))
+
+(deftest test-cljs-1524
+  (let [x0 []
+        x1 (conj x0 1)
+        x2 (conj x1 2)
+        x3 (remove #{1} x2)
+        x4 (remove #{2} x3)
+        x5 (conj x4 3)
+        x6 (conj x5 4)
+        x7 (conj x6 5)]
+    (is (not (== (hash x0) (hash x1) (hash x2) (hash x3) (hash x4)
+                 (hash x5) (hash x6) (hash x7))))))
 
 (comment
   ;; ObjMap

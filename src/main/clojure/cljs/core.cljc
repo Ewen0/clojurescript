@@ -864,9 +864,11 @@
   (core/list 'js* "~{} in ~{}" key obj))
 
 (core/defmacro js-debugger
-  "Emit JavaScript \"debugger;\" statement."
+  "Emit JavaScript \"debugger;\" statement"
   []
-  (core/list 'js* "debugger;"))
+  (core/list 'do
+             (core/list 'js* "debugger")
+             nil))
 
 (core/defmacro js-comment
   "Emit a top-level JavaScript multi-line comment. New lines will create a
@@ -919,14 +921,14 @@
 (core/defmacro identical? [a b]
   (bool-expr (core/list 'js* "(~{} === ~{})" a b)))
 
-(core/defmacro instance? [t o]
+(core/defmacro instance? [c x]
   ;; Google Closure warns about some references to RegExp, so
   ;; (instance? RegExp ...) needs to be inlined, but the expansion
   ;; should preserve the order of argument evaluation.
-  (bool-expr (if (clojure.core/symbol? t)
-               (core/list 'js* "(~{} instanceof ~{})" o t)
-               `(let [t# ~t o# ~o]
-                  (~'js* "(~{} instanceof ~{})" o# t#)))))
+  (bool-expr (if (clojure.core/symbol? c)
+               (core/list 'js* "(~{} instanceof ~{})" x c)
+               `(let [c# ~c x# ~x]
+                  (~'js* "(~{} instanceof ~{})" x# c#)))))
 
 (core/defmacro number? [x]
   (bool-expr (core/list 'js* "typeof ~{} === 'number'" x)))
@@ -2784,9 +2786,11 @@
                         (~'cljs$core$IFn$_invoke$arity$variadic
                           ~@(dest-args maxfa)
                           argseq#)))
-                   `(throw (js/Error.
-                             (str "Invalid arity: "
-                               (alength ~args-sym)))))))))
+                   (if (:macro meta)
+                     `(throw (js/Error.
+                               (str "Invalid arity: " (- (alength ~args-sym) 2))))
+                     `(throw (js/Error.
+                               (str "Invalid arity: " (alength ~args-sym))))))))))
          ~@(map fn-method fdecl)
          ;; optimization properties
          (set! (. ~name ~'-cljs$lang$maxFixedArity) ~maxfa)))))

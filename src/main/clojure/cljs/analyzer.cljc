@@ -34,7 +34,7 @@
                      [cljs.reader :as edn]))
   #?(:clj (:import [java.io File Reader PushbackReader]
                    [java.net URL]
-                   [clojure.lang Namespace Var LazySeq]
+                   [clojure.lang Namespace Var LazySeq ArityException]
                    [cljs.tagged_literals JSValue])))
 
 #?(:clj (set! *warn-on-reflection* true))
@@ -265,7 +265,7 @@
 
 (defmethod error-message :undeclared-ns-form
   [warning-type info]
-  (str "Referred " (:type info) " " (:lib info) "/" (:sym info) " does not exist"))
+  (str "Invalid :refer, var " (:type info) " " (:lib info) "/" (:sym info) " does not exist"))
 
 (defmethod error-message :protocol-deprecated
   [warning-type info]
@@ -497,12 +497,17 @@
              (into {}))))))
 
 #?(:clj
+   (def load-mutex (Object.)))
+
+#?(:clj
    (defn load-core []
      (when (not @-cljs-macros-loaded)
        (reset! -cljs-macros-loaded true)
        (if *cljs-macros-is-classpath*
-         (load *cljs-macros-path*)
-         (load-file *cljs-macros-path*)))
+         (locking load-mutex
+           (load *cljs-macros-path*))
+         (locking load-mutex
+           (load-file *cljs-macros-path*))))
      (intern-macros 'cljs.core)))
 
 #?(:clj
@@ -554,8 +559,11 @@
     :column (get-col name env)}))
 
 (defn message [env s]
-  (str s (when (:line env)
-           (str " at line " (:line env) " " *cljs-file*))))
+  (str s
+    (if (:line env)
+      (str " at line " (:line env) " " *cljs-file*)
+      (when *cljs-file*
+        (str " in file " *cljs-file*)))))
 
 (defn warning [warning-type env extra]
   (doseq [handler *cljs-warning-handlers*]
@@ -724,7 +732,7 @@
              (merge
                (gets @env/*compiler* ::namespaces full-ns :defs sym)
                {:name (symbol (str full-ns) (str sym))
-                :ns (-> env :ns :name)}))
+                :ns full-ns}))
 
            (not (nil? (gets @env/*compiler* ::namespaces (-> env :ns :name) :imports sym)))
            (recur env (gets @env/*compiler* ::namespaces (-> env :ns :name) :imports sym) confirm)
@@ -1645,7 +1653,11 @@
    (let [compiler @env/*compiler*]
      (binding [*cljs-dep-set* (vary-meta (conj *cljs-dep-set* lib) update-in [:dep-path] conj lib)]
        (assert (every? #(not (contains? *cljs-dep-set* %)) deps)
-         (str "Circular dependency detected " (-> *cljs-dep-set* meta :dep-path)))
+         (str "Circular dependency detected, "
+           (apply str
+             (interpose " -> "
+               (conj (-> *cljs-dep-set* meta :dep-path)
+                 (some *cljs-dep-set* deps))))))
        (doseq [dep deps]
          (when-not (or (not-empty (get-in compiler [::namespaces dep :defs]))
                        (contains? (:js-dependency-index compiler) (name dep))
@@ -2341,7 +2353,10 @@
         (if-not (nil? mac-var)
           (#?@(:clj [binding [*ns* (create-ns *cljs-ns*)]]
                :cljs [do])
-            (let [form' (apply @mac-var form env (rest form))]
+            (let [form' (try
+                          (apply @mac-var form env (rest form))
+                          #?(:clj (catch ArityException e
+                                    (throw (ArityException. (- (.actual e) 2) (.name e))))))]
               (if #?(:clj (seq? form') :cljs (cljs-seq? form'))
                 (let [sym' (first form')
                       sym  (first form)]
@@ -2351,7 +2366,12 @@
                                   sym
                                   (symbol "cljs.core" (str sym)))
                           js-op {:js-op sym}
-                          js-op (if (true? (-> mac-var meta ::numeric))
+                          numeric #?(:clj  (-> mac-var meta ::numeric)
+                                     :cljs (let [mac-var-ns   (symbol (namespace (.-sym mac-var)))
+                                                 mac-var-name (symbol (name (.-sym mac-var)))]
+                                             (get-in @env/*compiler*
+                                               [::namespaces mac-var-ns :defs mac-var-name :meta ::numeric])))
+                          js-op (if (true? numeric)
                                   (assoc js-op :numeric true)
                                   js-op)]
                       (vary-meta form' merge js-op))
@@ -2487,7 +2507,7 @@
    (defn ns-side-effects
      [env {:keys [op] :as ast} opts]
      (if (= :ns op)
-       (let [{:keys [deps uses require-macros use-macros reload reloads]} ast]
+       (let [{:keys [name deps uses require-macros use-macros reload reloads]} ast]
          (when (and *analyze-deps* (seq deps))
            (analyze-deps name deps env (dissoc opts :macros-ns)))
          (when (and *analyze-deps* (seq uses))
@@ -2499,16 +2519,20 @@
                        (get-in reloads [:use-macros nsym])
                        (and (= nsym name) *reload-macros* :reload))]
                (if k
-                 (clojure.core/require nsym k)
-                 (clojure.core/require nsym))
+                 (locking load-mutex
+                   (clojure.core/require nsym k))
+                 (locking load-mutex
+                   (clojure.core/require nsym)))
                (intern-macros nsym k)))
            (doseq [nsym (vals require-macros)]
              (let [k (or (:require-macros reload)
                        (get-in reloads [:require-macros nsym])
                        (and (= nsym name) *reload-macros* :reload))]
                (if k
-                 (clojure.core/require nsym k)
-                 (clojure.core/require nsym))
+                 (locking load-mutex
+                   (clojure.core/require nsym k))
+                 (locking load-mutex
+                   (clojure.core/require nsym)))
                (intern-macros nsym k)))
            (when (seq use-macros)
              (check-use-macros use-macros env)))
@@ -2781,19 +2805,24 @@
         (let [out-src (util/to-target-file output-dir (parse-ns src))]
           (if (not (.exists out-src))
             true
-            (if (> (util/last-modified src) (util/last-modified cache))
+            (if (util/changed? src cache)
               true
               (let [version' (util/compiled-by-version cache)
-                    version (util/clojurescript-version)]
+                    version  (util/clojurescript-version)]
                 (and version (not= version version'))))))))))
 
 #?(:clj
-   (defn write-analysis-cache [ns cache-file]
-     (util/mkdirs cache-file)
-     (spit cache-file
-       (str ";; Analyzed by ClojureScript " (util/clojurescript-version) "\n"
-         (pr-str
-           (dissoc (get-in @env/*compiler* [::namespaces ns]) :macros))))))
+   (defn write-analysis-cache
+     ([ns cache-file]
+       (write-analysis-cache ns cache-file nil))
+     ([ns cache-file src]
+      (util/mkdirs cache-file)
+      (spit cache-file
+        (str ";; Analyzed by ClojureScript " (util/clojurescript-version) "\n"
+          (pr-str
+            (dissoc (get-in @env/*compiler* [::namespaces ns]) :macros))))
+       (when src
+         (.setLastModified ^File cache-file (util/last-modified src))))))
 
 #?(:clj
    (defn analyze-file
@@ -2841,7 +2870,7 @@
                                        (recur ns (next forms))))
                                    ns)))]
                       (when (and cache (true? (:cache-analysis opts)))
-                        (write-analysis-cache ns cache))))
+                        (write-analysis-cache ns cache res))))
                   ;; we want want to keep dependency analysis information
                   ;; don't revert the environment - David
                   (let [{:keys [ns]}

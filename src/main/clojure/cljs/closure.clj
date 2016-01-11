@@ -456,30 +456,40 @@
 
 (defn jar-file-to-disk
   "Copy a file contained within a jar to disk. Return the created file."
-  [url out-dir]
-  (let [out-file (io/file out-dir (path-from-jarfile url))
-        content  (with-open [reader (io/reader url)]
-                   (slurp reader))]
-    (util/mkdirs out-file)
-    (spit out-file content)
-    out-file))
+  ([url out-dir]
+    (jar-file-to-disk url out-dir nil))
+  ([url out-dir opts]
+   (let [out-file (io/file out-dir (path-from-jarfile url))
+         content  (with-open [reader (io/reader url)]
+                    (slurp reader))]
+     (when (and url (or ana/*verbose* (:verbose opts)))
+       (util/debug-prn "Copying" (str url) "to" (str out-file)))
+     (util/mkdirs out-file)
+     (spit out-file content)
+     (.setLastModified ^File out-file (util/last-modified url))
+     out-file)))
 
 ;; TODO: it would be nice if we could consolidate requires-compilation?
 ;; logic - David
 (defn compile-from-jar
-  "Compile a file from a jar."
-  [this {:keys [output-file] :as opts}]
-  (or (when output-file
-        (let [out-file (io/file (util/output-directory opts) output-file)]
-          (when (and (.exists out-file)
-                     (= (util/compiled-by-version out-file)
-                        (util/clojurescript-version)))
-            (compile-file
-              (io/file (util/output-directory opts)
-                (last (string/split (.getPath ^URL this) #"\.jar!/")))
-              opts))))
-      (let [file-on-disk (jar-file-to-disk this (util/output-directory opts))]
-        (-compile file-on-disk opts))))
+  "Compile a file from a jar if necessary. Returns IJavaScript."
+  [jar-file {:keys [output-file] :as opts}]
+  (let [out-file (when output-file
+                   (io/file (util/output-directory opts) output-file))]
+    (if (or (nil? out-file)
+            (not (.exists ^File out-file))
+            (not= (util/compiled-by-version out-file)
+                  (util/clojurescript-version))
+            (util/changed? jar-file out-file))
+      ;; actually compile from JAR
+      (let [file-on-disk (jar-file-to-disk jar-file (util/output-directory opts) opts)]
+        (-compile file-on-disk opts))
+      ;; have to call compile-file as it includes more IJavaScript
+      ;; information than ana/parse-ns
+      (compile-file
+        (io/file (util/output-directory opts)
+          (last (string/split (.getPath ^URL jar-file) #"\.jar!/")))
+        opts))))
 
 (defn find-jar-sources
   [this opts]
@@ -1522,8 +1532,8 @@
 
 (defn write-javascript
   "Write or copy a JavaScript file to output directory. Only write if the file
-  does not already exist. Return IJavaScript for the file on disk at the new
-  location."
+   does not already exist. Return IJavaScript for the file on disk at the new
+   location."
   [opts js]
   (let [out-dir  (io/file (util/output-directory opts))
         out-name (rel-output-path js opts)
@@ -1532,14 +1542,21 @@
                   :out-file (.toString out-file)
                   :requires (deps/-requires js)
                   :provides (deps/-provides js)
-                  :group    (:group js)}]
-    (when-not (.exists out-file)
+                  :group    (:group js)}
+        res      (or (:url js) (:source-file js))]
+    (when (or (not (.exists out-file))
+              (and res (util/changed? out-file res)))
+      (when (and res (or ana/*verbose* (:verbose opts)))
+        (util/debug-prn "Copying" (str res) "to" (str out-file)))
       (util/mkdirs out-file)
       (spit out-file
-            (cond-> (if (map? js) (assoc js :source (deps/-source js)) js)
-              (:preprocess js) (js-transforms opts)
-              (:module-type js) (convert-js-module opts)
-              true deps/-source)))
+        (cond-> js
+          (map? js) (assoc :source (deps/-source js))
+          (:preprocess js) (js-transforms opts)
+          (:module-type js) (convert-js-module opts)
+          true deps/-source))
+      (when res
+        (.setLastModified ^File out-file (util/last-modified res))))
     (if (map? js)
       (merge js ijs)
       ijs)))
@@ -1556,21 +1573,25 @@
 
 (defn source-on-disk
   "Ensure that the given IJavaScript exists on disk in the output directory.
-  Return updated IJavaScript with the new location if necessary."
+   Return updated IJavaScript with the new location if necessary."
   [opts js]
   (if (write-js? js)
     (write-javascript opts js)
     ;; always copy original ClojureScript sources to the output directory
     ;; when source maps enabled
-    (let [out-file (when-let [ns (and (:source-map opts) (first (:provides js)))]
+    (let [out-file (when-let [ns (and (:source-map opts)
+                                      (:source-url js)
+                                      (first (:provides js)))]
                      (io/file (io/file (util/output-directory opts))
                        (util/ns->relpath ns (util/ext (:source-url js)))))
           source-url (:source-url js)]
       (when (and out-file source-url
                  (or (not (.exists ^File out-file))
-                     (> (.lastModified (io/file source-url))
-                        (.lastModified out-file))))
-        (spit out-file (slurp source-url)))
+                     (util/changed? (io/file source-url) out-file)))
+        (when (or ana/*verbose* (:verbose opts))
+          (util/debug-prn "Copying" (str source-url) "to" (str out-file)))
+        (spit out-file (slurp source-url))
+        (.setLastModified ^File out-file (util/last-modified source-url)))
       js)))
 
 (comment
@@ -1694,10 +1715,10 @@
                     (pr-str output-dir))))
   true)
 
-(defn check-source-map [{:keys [output-to source-map output-dir] :as opts}]
+(defn check-source-map [{:keys [output-to source-map output-dir optimizations] :as opts}]
   "When :source-map is specified in opts, "
   (when (and (contains? opts :source-map)
-             (not (= (:optimizations opts) :none)))
+             (not (= optimizations :none)))
     (assert (and (or (contains? opts :output-to)
                      (contains? opts :modules))
                  (contains? opts :output-dir))
@@ -1718,6 +1739,11 @@
                    "parent %s if optimization setting applied")
         (pr-str output-dir)
         (pr-str (absolute-parent output-to)))))
+  (when (and (contains? opts :source-map)
+             (= optimizations :none))
+    (assert (util/boolean? source-map)
+            (format ":source-map must be true or false when compiling with :optimizations :none but it is: %s"
+                    (pr-str source-map))))
   true)
 
 (defn check-source-map-path [{:keys [source-map-path] :as opts}]
@@ -2055,16 +2081,16 @@
 
 (defn aot-cache-core []
   (let [base-path (io/file "src" "main" "cljs" "cljs")
-        src (io/file base-path "core.cljs")
-        dest (io/file base-path "core.aot.js")
-        cache (io/file base-path "core.cljs.cache.aot.edn")]
+        src       (io/file base-path "core.cljs")
+        dest      (io/file base-path "core.aot.js")
+        cache     (io/file base-path "core.cljs.cache.aot.edn")]
     (util/mkdirs dest)
     (env/with-compiler-env (env/default-compiler-env)
       (comp/compile-file src dest
         {:source-map true
          :source-map-url "core.js.map"
          :output-dir (str "src" File/separator "main" File/separator "cljs")})
-      (ana/write-analysis-cache 'cljs.core cache))))
+      (ana/write-analysis-cache 'cljs.core cache src))))
 
 (comment
   (time
