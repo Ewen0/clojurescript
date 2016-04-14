@@ -302,6 +302,11 @@
   (testing "Testing symbol ctor is idempotent"
     (is (= 'a (symbol 'a))))
 
+  (testing "Testing constructed division symbol"
+    (is (= '/ (symbol "/")))
+    (is (= (namespace '/) (namespace (symbol "/"))))
+    (is (= (hash '/) (hash (symbol "/")))))
+
   (testing "Testing keyword ctor"
     (is (= :a (keyword "a")))
     (is (= :a (keyword 'a)))
@@ -907,6 +912,16 @@
     (is (contains? "f" 0))
     (is (not (contains? "f" 55)))))
 
+(deftest test-run!
+  (testing "Testing run!"
+    (let [a (atom 0)]
+      (run! (fn [n]
+              (swap! a + n))
+        (range 5))
+      (is (= 10 @a)))
+    (is (nil? (run! identity [1])))
+    (is (nil? (run! reduced (range))))))
+
 (deftest test-distinct
   (testing "Testing distinct? & distinct"
     (is (distinct? 1 2 3))
@@ -1034,6 +1049,55 @@
         (apply aset a [0 0 "bar"])
         (is (= (aget a 0 0) "bar"))))))
 
+(defn- primitive-arrays-equal
+  [a b]
+  (= (js->clj a) (js->clj b)))
+
+(deftest test-make-array
+  (testing "Testing make-array"
+    (is (primitive-arrays-equal #js [] (make-array 0)))
+    (is (primitive-arrays-equal #js [] (apply make-array [0])))
+    (is (primitive-arrays-equal #js [nil] (make-array 1)))
+    (is (primitive-arrays-equal #js [nil] (apply make-array [1])))
+    (is (primitive-arrays-equal #js [nil nil] (make-array 2)))
+    (is (primitive-arrays-equal #js [nil nil] (apply make-array [2])))
+    (is (primitive-arrays-equal #js [] (make-array nil 0)))
+    (is (primitive-arrays-equal #js [] (apply make-array [nil 0])))
+    (is (primitive-arrays-equal #js [nil] (make-array nil 1)))
+    (is (primitive-arrays-equal #js [nil] (apply make-array [nil 1])))
+    (is (primitive-arrays-equal #js [nil nil] (make-array nil 2)))
+    (is (primitive-arrays-equal #js [nil nil] (apply make-array [nil 2])))
+    (is (primitive-arrays-equal #js [] (make-array nil 0 0)))
+    (is (primitive-arrays-equal #js [] (apply make-array [nil 0 0])))
+    (is (primitive-arrays-equal #js [] (make-array nil 0 1)))
+    (is (primitive-arrays-equal #js [] (apply make-array [nil 0 1])))
+    (is (primitive-arrays-equal #js [#js []] (make-array nil 1 0)))
+    (is (primitive-arrays-equal #js [#js []] (apply make-array [nil 1 0])))
+    (is (primitive-arrays-equal #js [#js [] #js []] (make-array nil 2 0)))
+    (is (primitive-arrays-equal #js [#js [] #js []] (apply make-array [nil 2 0])))
+    (is (primitive-arrays-equal #js [#js [nil]] (make-array nil 1 1)))
+    (is (primitive-arrays-equal #js [#js [nil]] (apply make-array [nil 1 1])))
+    (is (primitive-arrays-equal #js [#js [nil] #js [nil]] (make-array nil 2 1)))
+    (is (primitive-arrays-equal #js [#js [nil] #js [nil]] (apply make-array [nil 2 1])))
+    (is (primitive-arrays-equal #js [#js [nil nil] #js [nil nil]] (make-array nil 2 2)))
+    (is (primitive-arrays-equal #js [#js [nil nil] #js [nil nil]] (apply make-array [nil 2 2])))
+    (is (primitive-arrays-equal #js [] (make-array nil 0 0 0)))
+    (is (primitive-arrays-equal #js [] (apply make-array [nil 0 0 0])))
+    (is (primitive-arrays-equal #js [] (make-array nil 0 1 1)))
+    (is (primitive-arrays-equal #js [] (apply make-array [nil 0 1 1])))
+    (is (primitive-arrays-equal #js [#js []] (make-array nil 1 0 0)))
+    (is (primitive-arrays-equal #js [#js []] (apply make-array [nil 1 0 0])))
+    (is (primitive-arrays-equal #js [#js [] #js []] (make-array nil 2 0 0)))
+    (is (primitive-arrays-equal #js [#js [] #js []] (apply make-array [nil 2 0 0])))
+    (is (primitive-arrays-equal #js [#js [#js []]] (make-array nil 1 1 0)))
+    (is (primitive-arrays-equal #js [#js [#js []]] (apply make-array [nil 1 1 0])))
+    (is (primitive-arrays-equal #js [#js [#js [nil]]] (make-array nil 1 1 1)))
+    (is (primitive-arrays-equal #js [#js [#js [nil]]] (apply make-array [nil 1 1 1])))
+    (is (primitive-arrays-equal #js [#js [#js [nil nil] #js [nil nil]] #js [#js [nil nil] #js [nil nil]]]
+          (make-array nil 2 2 2)))
+    (is (primitive-arrays-equal #js [#js [#js [nil nil] #js [nil nil]] #js [#js [nil nil] #js [nil nil]]]
+          (apply make-array [nil 2 2 2])))))
+
 (deftest test-rearrange-sequential
   (testing "Test rearranging sequential collections"
     (is (= [1 2 3 4 5] (sort [5 3 1 4 2])))
@@ -1047,6 +1111,45 @@
           shuffles (filter #(not= coll %) (take 100 (iterate shuffle coll)))]
       (is (not (empty? shuffles))))
     ))
+
+(deftest test-ISequential-indexOf
+  (testing "Testing JS .indexOf in ISequential types"
+    ;; PersistentVector
+    (is (= (.indexOf [] 2) -1))
+    (is (= (.indexOf [] 2 3) -1))
+    (is (= (.indexOf [1 2 3 4 5] 2) 1))
+    (is (= (.indexOf [1 2 3 4 5] 6) -1))
+    (is (= (.indexOf [1 2 3 4 5] -1) -1))
+    (is (= (.indexOf [1 2 "x" 4 5 "a"] "a") 5))
+    (is (= (.indexOf [1 2 3 4 5] 1 2) -1))
+    (is (= (.indexOf [1 2 3 4 5] 2 2) -1))
+    (is (= (.indexOf [1 2 3 1 5] 1 2) 3))
+    (is (= (.indexOf [1 2 3 4 5] 2) 1))
+    (is (= (.indexOf '(1 2 3 4 5) 2) 1))
+    (is (= (.indexOf (list 1 2 3) 3) 2))
+    (is (= (.indexOf (lazy-seq [1 2 3 4 5]) 3)) 2)
+    (is (= (.indexOf (sequence (map inc) '(0 1 2 3 4)) 5) 4))))
+
+(deftest test-ISequential-lastIndexOf
+  (testing "Testing JS .lastIndexOf in ISequential types"
+    ;; PersistentVector
+    (is (= (.lastIndexOf [] 2) -1))
+    (is (= (.lastIndexOf [] 2 3) -1))
+    (is (= (.lastIndexOf [1 2 3 4 5] 2) 1))
+    (is (= (.lastIndexOf [1 2 3 1 5] 1) 3))
+    (is (= (.lastIndexOf [1 2 3 1 5] 1 3) 3))
+    (is (= (.lastIndexOf [1 2 3 1 5] 1 2) 0))
+    (is (= (.lastIndexOf [1 2 3 1] 1 0) 0))
+    (is (= (.lastIndexOf [1 2 3 4 5] 3 100) 2))
+    (is (= (.lastIndexOf [1 1 1 1 1] 1) 4))
+    (is (= (.lastIndexOf [1 1 1 1 1] 1 6) 4))
+    (is (= (.lastIndexOf [1 2 1 1 1] 2) 1))
+    (is (= (.lastIndexOf [1 2 3 4 5] 3 -100) -1))
+    (is (= (.lastIndexOf [1 2 3 4 5] 3 -2) 2))
+    (is (= (.lastIndexOf '(1 2 1 4 5) 1) 2))
+    (is (= (.lastIndexOf (list 1 2 3 1 5) 1) 3))
+    (is (= (.lastIndexOf (lazy-seq [1 2 1 4 5]) 1)) 2)
+    (is (= (.lastIndexOf (sequence (map inc) '(0 1 0 3 4)) 1) 2))))
 
 (deftest test-js-clj-conversions
   (testing "Testing JS / CLJS data conversions"
@@ -1409,7 +1512,9 @@
       (is (= (sequence xform data) '(36 200 10))))
     (let [xf (map #(+ %1 %2))]
       (is (= (sequence xf [0 0] [1 2]) [1 2])))
-    ))
+    (is (= (-> (sequence (map inc) [1 2 3])
+             (with-meta {:a 1})
+             meta) {:a 1}))))
 
 (deftest test-obj-equiv
   (testing "Object equiv method"
@@ -1477,8 +1582,9 @@
         (is (.-done (.next iter)))))
     (let [eiter (.entries {:foo "bar" :baz "woz"})]
       (testing "map entry iteration"
-        (is (= (seq (.-value (.next eiter))) (seq #js [:foo "bar"])))
-        (is (= (seq (.-value (.next eiter))) (seq #js [:baz "woz"])))
+        (let [entries #{(seq #js [:foo "bar"]) (seq #js [:baz "woz"])}]
+          (is (entries (seq (.-value (.next eiter)))))
+          (is (entries (seq (.-value (.next eiter))))))
         (is (.-done (.next eiter)))))
     (let [iter (.values {:foo "bar" :baz "woz"})]
       (testing "map value iteration"
@@ -1538,10 +1644,10 @@
               "{:foo \"bar\"}"))
     (is (= (binding [*print-length* 0] (str {:foo "bar" :baz "woz"}))
           "{...}"))
-    (is (= (binding [*print-length* 1] (str {:foo "bar" :baz "woz"}))
-              "{:foo \"bar\", ...}"))
-    (is (= (binding [*print-length* 10] (str {:foo "bar" :baz "woz"}))
-              "{:foo \"bar\", :baz \"woz\"}")))
+    (is (#{"{:foo \"bar\", ...}" "{:baz \"woz\", ...}"}
+          (binding [*print-length* 1] (str {:foo "bar" :baz "woz"}))))
+    (is (#{"{:foo \"bar\", :baz \"woz\"}" "{:baz \"woz\", :foo \"bar\"}"}
+          (binding [*print-length* 10] (str {:foo "bar" :baz "woz"})))))
   )
 
 (deftest test-print-with-opts
@@ -1551,12 +1657,16 @@
           "[<MORE-MARKER>]"))
     (is (= (pr-str-with-opts [[1 2 3]] {:more-marker "\u2026" :print-length 1})
           "[1 \u2026]"))
-    (is (= (pr-str-with-opts [#{1 2 3}] {:more-marker "\u2026" :print-length 2})
-          "#{1 3 \u2026}"))
+    (is (#{"#{1 2 \u2026}" "#{1 3 \u2026}" 
+           "#{2 1 \u2026}" "#{2 3 \u2026}"
+           "#{3 1 \u2026}" "#{3 2 \u2026}"}
+          (pr-str-with-opts [#{1 2 3}] {:more-marker "\u2026" :print-length 2})))
     (is (= (pr-str-with-opts ['(1 2 3)] {:more-marker "\u2026" :print-length 2})
           "(1 2 \u2026)"))
-    (is (= (pr-str-with-opts [{:1 1 :2 2 :3 3}] {:more-marker "\u2026" :print-length 2})
-          "{:1 1, :2 2, \u2026}")))
+    (is (#{"{:1 1, :2 2, \u2026}" "{:1 1, :3 3, \u2026}"
+           "{:2 2, :1 1, \u2026}" "{:2 2, :3 3, \u2026}"
+           "{:3 3, :1 1, \u2026}" "{:3 3, :2 2, \u2026}"}
+          (pr-str-with-opts [{:1 1 :2 2 :3 3}] {:more-marker "\u2026" :print-length 2}))))
 
   (testing "Testing printing with opts - :alt-impl"
     ; CLJS-1010
@@ -2324,10 +2434,9 @@
 
 (deftest test-739
   (testing "Testing CLJS-739, with-out-str"
-    (set! *print-newline* true)
-    (is (= (with-out-str (doseq [fn (cljs-739 [] [:a :b :c :d])] (fn)))
-          ":a\n:b\n:c\n:d\n"))
-    (set! *print-newline* false)))
+    (binding [*print-newline* true]
+      (is (= (with-out-str (doseq [fn (cljs-739 [] [:a :b :c :d])] (fn)))
+          ":a\n:b\n:c\n:d\n")))))
 
 (deftest test-728
   (testing "Testing CLJS-728, lookup with default"
@@ -2939,8 +3048,8 @@
   ([x0 & xs] [x0 xs]))
 
 (deftest test-cljs-1284
-  (let [xs (IndexedSeq. #js [] 0)
-        ys (IndexedSeq. #js [1] 3)]
+  (let [xs (IndexedSeq. #js [] 0 nil)
+        ys (IndexedSeq. #js [1] 3 nil)]
     (is (nil? (first xs)))
     (is (nil? (seq xs)))
     (is (= (rest xs) ()))
@@ -3007,6 +3116,31 @@
         x7 (conj x6 5)]
     (is (not (== (hash x0) (hash x1) (hash x2) (hash x3) (hash x4)
                  (hash x5) (hash x6) (hash x7))))))
+
+(deftest test-cljs-1569
+  (is (= (meta (with-meta (seq [1 2 3]) {:a 1})) {:a 1})))
+
+(deftest test-cljs-1420
+  (is (= :2-arity
+         (get-in
+           (reify
+             ILookup
+             (-lookup [o k] :2-arity)
+             (-lookup [o k not-found] :3-arity))
+           [:foo]))))
+
+(deftest test-cljs-1594
+  (is  (not (js/isNaN (hash Infinity))))
+  (is  (not (js/isNaN (hash -Infinity))))
+  (is  (not (js/isNaN (hash NaN))))
+  (is  (=  (hash-set Infinity -Infinity 0 1 2 3 4 5 6 7 8)
+          (set  (keys  (zipmap  [Infinity -Infinity 0 1 2 3 4 5 6 7 8]  (repeat nil)))))))
+
+(deftest test-cljs-1590
+  (is (= [""] (s/split "" #"\n")))
+  (is (= [] (s/split "\n\n\n" #"\n")))
+  (is (= [""] (s/split-lines "")))
+  (is (= [] (s/split-lines "\n\n\n"))))
 
 (comment
   ;; ObjMap

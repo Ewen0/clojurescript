@@ -4,13 +4,13 @@
   :url "https://github.com/clojure/clojurescript"
   :license {:name "Eclipse Public License"
             :url "http://www.eclipse.org/legal/epl-v10.html"}
-  :jvm-opts ^:replace ["-Xmx512m" "-server"]
+  :jvm-opts ^:replace ["-Dclojure.compiler.direct-linking=true" "-Xmx512m" "-server"]
   :source-paths ["src/main/clojure" "src/main/cljs"]
   :resource-paths ["src/main/cljs"]
   :test-paths ["src/test/clojure" "src/test/cljs" "src/test/self"]
-  :dependencies [[org.clojure/clojure "1.7.0"]
+  :dependencies [[org.clojure/clojure "1.8.0"]
                  [org.clojure/data.json "0.2.6"]
-                 [org.clojure/tools.reader "1.0.0-alpha1"]
+                 [org.clojure/tools.reader "1.0.0-beta1"]
                  [org.clojure/google-closure-library "0.0-20151016-61277aea"]
                  [com.google.javascript/closure-compiler "v20151216"]
                  [org.mozilla/rhino "1.7R5"]]

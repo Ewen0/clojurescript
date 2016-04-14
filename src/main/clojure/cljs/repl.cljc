@@ -10,9 +10,11 @@
   (:refer-clojure :exclude [load-file])
   (:require [clojure.java.io :as io]
             [clojure.string :as string]
+            [clojure.set :as set]
             [clojure.data.json :as json]
             [clojure.tools.reader :as reader]
             [clojure.tools.reader.reader-types :as readers]
+            [cljs.tagged-literals :as tags]
             [clojure.stacktrace :as trace]
             [clojure.repl :as cljrepl]
             [clojure.edn :as edn]
@@ -34,6 +36,13 @@
 
 (def ^:dynamic *cljs-verbose* false)
 (def ^:dynamic *repl-opts* nil)
+
+(def known-repl-opts
+  "Set of all known REPL options."
+  #{:analyze-path :bind-err :caught :compiler-env :def-emits-var :eval :flush
+    :init :need-prompt :print :print-no-newline :prompt :quit-prompt :read
+    :reader :repl-requires :repl-verbose :source-map-inline :watch :watch-fn
+    :wrap})
 
 (defmacro err-out [& body]
   `(binding [*out* *err*]
@@ -772,6 +781,9 @@
                                   [cljs.pprint :refer [pprint] :refer-macros [pp]]]
                   bind-err true}
              :as opts}]
+  (doseq [[unknown-opt suggested-opt] (util/unknown-opts (set (keys opts)) (set/union known-repl-opts cljsc/known-opts))]
+    (when suggested-opt
+      (println (str "WARNING: Unknown option '" unknown-opt "'. Did you mean '" suggested-opt "'?"))))
   (let [repl-opts (-repl-options repl-env)
         repl-requires (into repl-requires (:repl-requires repl-opts))
         {:keys [analyze-path repl-verbose warn-on-undeclared special-fns static-fns] :as opts
@@ -1153,7 +1165,7 @@ itself (not its value) is returned. The reader macro #'x expands to (var x)."}})
      (binding [cljs.core/*print-newline* true]
        (with-out-str
          ~(if-let [special-name ('{& fn catch try finally try} name)]
-            `(cljs.repl/print-doc (quote ~(special-doc special-name)))
+            `(doc ~special-name)
             (cond
               (special-doc-map name)
               `(cljs.repl/print-doc (quote ~(special-doc name)))
@@ -1225,8 +1237,9 @@ itself (not its value) is returned. The reader macro #'x expands to (var x)."}})
           (with-open [pbr (PushbackReader. (io/reader f))]
             (let [rdr (readers/source-logging-push-back-reader pbr)]
               (dotimes [_ (dec (:line v))] (readers/read-line rdr))
-              (-> (reader/read {:read-cond :allow :features #{:cljs}} rdr)
-                meta :source))))))))
+              (binding [reader/*data-readers* tags/*cljs-data-readers*]
+                (-> (reader/read {:read-cond :allow :features #{:cljs}} rdr)
+                  meta :source)))))))))
 
 (comment
   (def cenv (env/default-compiler-env))

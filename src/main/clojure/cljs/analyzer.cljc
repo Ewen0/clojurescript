@@ -34,6 +34,7 @@
                      [cljs.reader :as edn]))
   #?(:clj (:import [java.io File Reader PushbackReader]
                    [java.net URL]
+                   [java.lang Throwable]
                    [clojure.lang Namespace Var LazySeq ArityException]
                    [cljs.tagged_literals JSValue])))
 
@@ -41,7 +42,7 @@
 
 (def ^:dynamic *cljs-ns* 'cljs.user)
 (def ^:dynamic *cljs-file* nil)
-#?(:clj (def ^:dynamic *unchecked-if* (atom false)))
+#?(:clj (def ^:dynamic *unchecked-if* false))
 (def ^:dynamic *cljs-static-fns* false)
 (def ^:dynamic *cljs-macros-path* "/cljs/core")
 (def ^:dynamic *cljs-macros-is-classpath* true)
@@ -220,7 +221,10 @@
 
 (defmethod error-message :undeclared-var
   [warning-type info]
-  (str "Use of undeclared Var " (:prefix info) "/" (:suffix info)))
+  (str (if (:macro-present? info)
+         "Can't take value of macro "
+         "Use of undeclared Var ")
+    (:prefix info) "/" (:suffix info)))
 
 (defmethod error-message :undeclared-ns
   [warning-type {:keys [ns-sym js-provide] :as info}]
@@ -599,9 +603,14 @@
   [env prefix suffix]
   (contains? implicit-nses prefix))
 
+(declare get-expander)
+
 (defn confirm-var-exist-warning [env prefix suffix]
   (fn [env prefix suffix]
-    (warning :undeclared-var env {:prefix prefix :suffix suffix})))
+    (warning :undeclared-var env
+      {:prefix         prefix
+       :suffix         suffix
+       :macro-present? (not (nil? (get-expander (symbol (str prefix) (str suffix)) env)))})))
 
 (defn loaded-js-ns?
   "Check if a JavaScript namespace has been loaded. JavaScript vars are
@@ -662,8 +671,6 @@
              ;; confirm that the library at least exists
              #?(:clj (nil? (util/ns->source ns-sym))))
     (warning :undeclared-ns env {:ns-sym ns-sym})))
-
-(declare get-expander)
 
 (defn core-name?
   "Is sym visible from core in the current compilation namespace?"
@@ -974,8 +981,7 @@
         else-expr (allowing-redef (analyze env else))]
     {:env env :op :if :form form
      :test test-expr :then then-expr :else else-expr
-     :unchecked #?(:clj  @*unchecked-if*
-                   :cljs *unchecked-if*)
+     :unchecked *unchecked-if*
      :children [test-expr then-expr else-expr]}))
 
 (defmethod parse 'case*
@@ -1582,8 +1588,7 @@
                          (= target '*unchecked-if*) ;; TODO: proper resolve
                          (or (true? val) (false? val)))
                        (do
-                         #?(:clj  (reset! *unchecked-if* val)
-                            :cljs (set! *unchecked-if* val))
+                         (set! *unchecked-if* val)
                          ::set-unchecked-if)
 
                        (symbol? target)
@@ -2317,7 +2322,8 @@
         :cljs [(identical? "clojure.repl" nstr) (find-macros-ns 'cljs.repl)])
     #?@(:clj  [(.contains nstr ".")             (find-ns (symbol nstr))]
         :cljs [(goog.string/contains nstr ".")  (find-macros-ns (symbol nstr))])
-    :else (some-> env :ns :require-macros (get (symbol nstr)) find-ns)))
+    :else (some-> env :ns :require-macros (get (symbol nstr)) #?(:clj  find-ns
+                                                                 :cljs find-macros-ns))))
 
 (defn get-expander* [sym env]
   (when-not (or (not (nil? (gets env :locals sym))) ; locals hide macros
@@ -2701,9 +2707,10 @@
         (let [src (if (symbol? src)
                     (util/ns->source src)
                     src)
-              compiler-env @env/*compiler*
-              [ijs compiler-env']
-              (binding [env/*compiler* (atom compiler-env)
+              ijs
+              (binding [env/*compiler* (if (false? (:restore opts))
+                                         env/*compiler*
+                                         (atom @env/*compiler*))
                         *cljs-ns* 'cljs.user
                         *cljs-file* src
                         *macro-infer*
@@ -2733,35 +2740,28 @@
                                             'cljs.core$macros
                                             ns-name)
                                   deps (merge (:uses ast) (:requires ast))]
-                              [(merge
-                                 {:ns           (or ns-name 'cljs.user)
-                                  :provides     [ns-name]
-                                  :requires     (if (= 'cljs.core ns-name)
-                                                  (set (vals deps))
-                                                  (cond-> (conj (set (vals deps)) 'cljs.core)
-                                                          (get-in compiler-env [:options :emit-constants])
-                                                          (conj 'constants-table)))
-                                  :file         dest
-                                  :source-file  (when rdr src)
-                                  :source-forms (when-not rdr src)
-                                  :ast          ast
-                                  :macros-ns    (or (:macros-ns opts)
-                                                    (= 'cljs.core$macros ns-name))}
-                                 (when (and dest (.exists ^File dest))
-                                   {:lines (with-open [reader (io/reader dest)]
-                                             (-> reader line-seq count))}))
-                               @env/*compiler*])
+                              (merge
+                                {:ns           (or ns-name 'cljs.user)
+                                 :provides     [ns-name]
+                                 :requires     (if (= 'cljs.core ns-name)
+                                                 (set (vals deps))
+                                                 (cond-> (conj (set (vals deps)) 'cljs.core)
+                                                   (get-in @env/*compiler* [:options :emit-constants])
+                                                   (conj 'constants-table)))
+                                 :file         dest
+                                 :source-file  (when rdr src)
+                                 :source-forms (when-not rdr src)
+                                 :ast          ast
+                                 :macros-ns    (or (:macros-ns opts)
+                                                   (= 'cljs.core$macros ns-name))}
+                                (when (and dest (.exists ^File dest))
+                                  {:lines (with-open [reader (io/reader dest)]
+                                            (-> reader line-seq count))})))
                             (recur (rest forms))))
                         (throw (AssertionError. (str "No ns form found in " src)))))
                     (finally
                       (when rdr
                         (.close ^Reader rdr))))))]
-          (when (false? (:restore opts))
-            (swap! env/*compiler*
-              (fn [old-state]
-                (-> old-state
-                  (update-in [::namespaces] merge (get compiler-env' ::namespaces))
-                  (update-in [::constant-table] merge (get compiler-env' ::constant-table))))))
           ijs)))))
 
 #?(:clj
@@ -2834,57 +2834,64 @@
       compiler options, if :cache-analysis true will cache analysis to
       \":output-dir/some/ns/foo.cljs.cache.edn\". This function does not return a
       meaningful value."
-     ([f] (analyze-file f nil))
+     ([f]
+      (analyze-file f nil))
      ([f opts]
-      (binding [*file-defs* (atom #{})]
+      (analyze-file f false opts))
+     ([f skip-cache opts]
+      (binding [*file-defs*    (atom #{})
+                *unchecked-if* false]
         (let [output-dir (util/output-directory opts)
-              res (cond
-                    (instance? File f) f
-                    (instance? URL f) f
-                    (re-find #"^file://" f) (URL. f)
-                    :else (io/resource f))]
+              res        (cond
+                           (instance? File f) f
+                           (instance? URL f) f
+                           (re-find #"^file://" f) (URL. f)
+                           :else (io/resource f))]
           (assert res (str "Can't find " f " in classpath"))
           (ensure
             (let [ns-info (parse-ns res)
-                  path (if (instance? File res)
-                         (.getPath ^File res)
-                         (.getPath ^URL res))
-                  cache (when (:cache-analysis opts)
-                          (cache-file res ns-info output-dir))]
+                  path    (if (instance? File res)
+                            (.getPath ^File res)
+                            (.getPath ^URL res))
+                  cache   (when (:cache-analysis opts)
+                            (cache-file res ns-info output-dir))]
               (when-not (get-in @env/*compiler* [::namespaces (:ns ns-info) :defs])
-                (if (or (not cache) (requires-analysis? res output-dir))
+                (if (or skip-cache (not cache) (requires-analysis? res output-dir))
                   (binding [*cljs-ns* 'cljs.user
                             *cljs-file* path
                             reader/*alias-map* (or reader/*alias-map* {})]
                     (when (or *verbose* (:verbose opts))
                       (util/debug-prn "Analyzing" (str res)))
                     (let [env (assoc (empty-env) :build-options opts)
-                          ns (with-open [rdr (io/reader res)]
-                               (loop [ns nil forms (seq (forms-seq* rdr (util/path res)))]
-                                 (if forms
-                                   (let [form (first forms)
-                                         env (assoc env :ns (get-namespace *cljs-ns*))
-                                         ast (analyze env form nil opts)]
-                                     (if (= (:op ast) :ns)
-                                       (recur (:name ast) (next forms))
-                                       (recur ns (next forms))))
-                                   ns)))]
+                          ns  (with-open [rdr (io/reader res)]
+                                (loop [ns nil forms (seq (forms-seq* rdr (util/path res)))]
+                                  (if forms
+                                    (let [form (first forms)
+                                          env (assoc env :ns (get-namespace *cljs-ns*))
+                                          ast (analyze env form nil opts)]
+                                      (if (= (:op ast) :ns)
+                                        (recur (:name ast) (next forms))
+                                        (recur ns (next forms))))
+                                    ns)))]
                       (when (and cache (true? (:cache-analysis opts)))
                         (write-analysis-cache ns cache res))))
-                  ;; we want want to keep dependency analysis information
-                  ;; don't revert the environment - David
-                  (let [{:keys [ns]}
-                        (parse-ns res
-                          (merge opts
-                            {:restore false
-                             :analyze-deps true
-                             :load-macros true}))]
-                    (when (or *verbose* (:verbose opts))
-                      (util/debug-prn "Reading analysis cache for" (str res)))
-                    (swap! env/*compiler*
-                      (fn [cenv]
-                        (let [cached-ns (edn/read-string (slurp cache))]
-                          (doseq [x (get-in cached-ns [::constants :order])]
-                            (register-constant! x))
-                          (-> cenv
-                            (assoc-in [::namespaces ns] cached-ns)))))))))))))))
+                  (try
+                    ;; we want want to keep dependency analysis information
+                    ;; don't revert the environment - David
+                    (let [{:keys [ns]} (parse-ns res
+                                         (merge opts
+                                           {:restore false
+                                            :analyze-deps true
+                                            :load-macros true}))
+                          cached-ns    (edn/read-string (slurp cache))]
+                     (when (or *verbose* (:verbose opts))
+                       (util/debug-prn "Reading analysis cache for" (str res)))
+                     (swap! env/*compiler*
+                       (fn [cenv]
+                         (let []
+                           (doseq [x (get-in cached-ns [::constants :order])]
+                             (register-constant! x))
+                           (-> cenv
+                             (assoc-in [::namespaces ns] cached-ns))))))
+                    (catch Throwable e
+                      (analyze-file f true opts))))))))))))

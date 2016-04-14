@@ -7,8 +7,8 @@
 ;   You must not remove this notice, or any other, from this software.
 
 (ns cljs.core
-  (:refer-clojure :exclude [-> ->> .. amap and areduce alength aclone assert binding bound-fn case comment cond condp
-                            declare definline definterface defmethod defmulti defn defn- defonce
+  (:refer-clojure :exclude [-> ->> .. amap and areduce alength aclone assert assert-args binding bound-fn case comment
+                            cond condp declare definline definterface defmethod defmulti defn defn- defonce
                             defprotocol defrecord defstruct deftype delay destructure doseq dosync dotimes doto
                             extend-protocol extend-type fn for future gen-class gen-interface
                             if-let if-not import io! lazy-cat lazy-seq let letfn locking loop
@@ -35,19 +35,21 @@
                             cond-> cond->> as-> some-> some->>
 
                             if-some when-some test ns-interns ns-unmap var vswap! macroexpand-1 macroexpand
-                            #?@(:cljs [alias assert-args coercive-not coercive-not= coercive-= coercive-boolean
+                            #?@(:cljs [alias coercive-not coercive-not= coercive-= coercive-boolean
                                        truth_ js-arguments js-delete js-in js-debugger exists? divide js-mod
                                        unsafe-bit-and bit-shift-right-zero-fill mask bitpos caching-hash
                                        defcurried rfn specify! js-this this-as implements? array js-obj
                                        simple-benchmark gen-apply-to js-str es6-iterable load-file* undefined?
                                        specify copy-arguments goog-define js-comment js-inline-comment
                                        unsafe-cast])])
-  #?(:cljs (:require-macros [cljs.core :as core]))
+  #?(:cljs (:require-macros [cljs.core :as core]
+                            [cljs.support :refer [assert-args]]))
   (:require clojure.walk
             clojure.set
             [clojure.string :as string]
             [cljs.compiler :as comp]
             [cljs.env :as env]
+            #?(:clj [cljs.support :refer [assert-args]])
             #?(:cljs [cljs.core :as core])
             #?(:cljs [cljs.analyzer :as ana])))
 
@@ -338,9 +340,9 @@
      ([bindings then]
       `(if-let ~bindings ~then nil))
      ([bindings then else & oldform]
-      (core/assert-args
+      (assert-args if-let
         (vector? bindings) "a vector for its binding"
-        (nil? oldform) "1 or 2 forms after binding vector"
+        (empty? oldform) "1 or 2 forms after binding vector"
         (= 2 (count bindings)) "exactly 2 forms in binding vector")
       (core/let [form (bindings 0) tst (bindings 1)]
         `(let [temp# ~tst]
@@ -396,7 +398,7 @@
 
      Roughly the same as (when (seq xs) (let [x (first xs)] body)) but xs is evaluated only once"
      [bindings & body]
-     (core/assert-args
+     (assert-args when-first
        (vector? bindings) "a vector for its binding"
        (= 2 (count bindings)) "exactly 2 forms in binding vector")
      (core/let [[x xs] bindings]
@@ -410,7 +412,7 @@
 
      When test is true, evaluates body with binding-form bound to the value of test"
      [bindings & body]
-     (core/assert-args
+     (assert-args when-let
        (vector? bindings) "a vector for its binding"
        (= 2 (count bindings)) "exactly 2 forms in binding vector")
      (core/let [form (bindings 0) tst (bindings 1)]
@@ -504,9 +506,9 @@
      ([bindings then]
       `(if-some ~bindings ~then nil))
      ([bindings then else & oldform]
-      (core/assert-args
+      (assert-args if-some
         (vector? bindings) "a vector for its binding"
-        (nil? oldform) "1 or 2 forms after binding vector"
+        (empty? oldform) "1 or 2 forms after binding vector"
         (= 2 (count bindings)) "exactly 2 forms in binding vector")
       (core/let [form (bindings 0) tst (bindings 1)]
         `(let [temp# ~tst]
@@ -522,7 +524,7 @@
       When test is not nil, evaluates body with binding-form bound to the
       value of test"
      [bindings & body]
-     (core/assert-args
+     (assert-args when-some
        (vector? bindings) "a vector for its binding"
        (= 2 (count bindings)) "exactly 2 forms in binding vector")
      (core/let [form (bindings 0) tst (bindings 1)]
@@ -601,20 +603,6 @@
 (core/defmacro defonce [x init]
   `(when-not (exists? ~x)
      (def ~x ~init)))
-
-(core/defmacro ^{:private true} assert-args [fnname & pairs]
-  #?(:clj `(do (when-not ~(first pairs)
-                 (throw (IllegalArgumentException.
-                          ~(core/str fnname " requires " (second pairs)))))
-               ~(core/let [more (nnext pairs)]
-                  (core/when more
-                    (list* `assert-args fnname more))))
-     :cljs `(do (when-not ~(first pairs)
-                  (throw (js/Error.
-                           ~(core/str fnname " requires " (second pairs)))))
-                ~(core/let [more (nnext pairs)]
-                   (core/when more
-                     (list* `assert-args fnname more))))))
 
 (core/defn destructure [bindings]
   (core/let [bents (partition 2 bindings)
@@ -1284,7 +1272,7 @@
        ~x)))
 
 (core/defmacro specify
-  "Identical to specify but does not mutate its first argument. The first
+  "Identical to specify! but does not mutate its first argument. The first
   argument must be an ICloneable instance."
   [expr & impls]
   `(cljs.core/specify! (cljs.core/clone ~expr)
@@ -1482,10 +1470,52 @@
               (recur (conj seen fname) (next methods)))))
         (recur (conj protos proto) impls)))))
 
+(core/defn- type-hint-first-arg
+  [type-sym argv]
+  (assoc argv 0 (vary-meta (argv 0) assoc :tag type-sym)))
+
+(core/defn- type-hint-single-arity-sig
+  [type-sym sig]
+  (list* (first sig) (type-hint-first-arg type-sym (second sig)) (nnext sig)))
+
+(core/defn- type-hint-multi-arity-sig
+  [type-sym sig]
+  (list* (type-hint-first-arg type-sym (first sig)) (next sig)))
+
+(core/defn- type-hint-multi-arity-sigs
+  [type-sym sigs]
+  (list* (first sigs) (map (partial type-hint-multi-arity-sig type-sym) (rest sigs))))
+
+(core/defn- type-hint-sigs
+  [type-sym sig]
+  (if (vector? (second sig))
+    (type-hint-single-arity-sig type-sym sig)
+    (type-hint-multi-arity-sigs type-sym sig)))
+
+(core/defn- type-hint-impl-map
+  [type-sym impl-map]
+  (reduce-kv (core/fn [m proto sigs]
+               (assoc m proto (map (partial type-hint-sigs type-sym) sigs)))
+    {} impl-map))
+
 (core/defmacro extend-type
   "Extend a type to a series of protocols. Useful when you are
-   supplying the definitions explicitly inline. Propagates the
-   type as a type hint on the first argument of all fns.
+  supplying the definitions explicitly inline. Propagates the
+  type as a type hint on the first argument of all fns.
+
+  type-sym may be
+
+   * default, meaning the definitions will apply for any value,
+     unless an extend-type exists for one of the more specific
+     cases below.
+   * nil, meaning the definitions will apply for the nil value.
+   * any of object, boolean, number, string, array, or function,
+     indicating the definitions will apply for values of the
+     associated base JavaScript types. Note that, for example,
+     string should be used instead of js/String.
+   * a JavaScript type not covered by the previous list, such
+     as js/RegExp.
+   * a type defined by deftype or defrecord.
 
   (extend-type MyType
     ICounted
@@ -1498,6 +1528,9 @@
              _ (validate-impls env impls)
              resolve (partial resolve-var env)
              impl-map (->impl-map impls)
+             impl-map (if ('#{boolean number} type-sym)
+                        (type-hint-impl-map type-sym impl-map)
+                        impl-map)
              [type assign-impls] (core/if-let [type (base-type type-sym)]
                                    [type base-assign-impls]
                                    [(resolve type-sym) proto-assign-impls])]
@@ -2054,7 +2087,7 @@
                                (split-at (if (= :>> (second args)) 3 2) args)
                                n (count clause)]
                       (core/cond
-                        (= 0 n) `(throw (js/Error. (core/str "No matching clause: " ~expr)))
+                        (= 0 n) `(throw (js/Error. (cljs.core/str "No matching clause: " ~expr)))
                         (= 1 n) a
                         (= 2 n) `(if (~pred ~a ~expr)
                                    ~b
@@ -2138,7 +2171,7 @@
              esym    (gensym)
              tests   (keys pairs)]
     (core/cond
-      (every? (some-fn core/number? core/string? core/char? #(const? env %)) tests)
+      (every? (some-fn core/number? core/string? #?(:clj core/char? :cljs (core/fnil core/char? :nonchar)) #(const? env %)) tests)
       (core/let [no-default (if (odd? (count clauses)) (butlast clauses) clauses)
                  tests      (mapv #(if (seq? %) (vec %) [%]) (take-nth 2 no-default))
                  thens      (vec (take-nth 2 (drop 1 no-default)))]
@@ -2166,13 +2199,12 @@
   ([x]
      (core/when *assert*
        `(when-not ~x
-          (throw (js/Error.
-                  (cljs.core/str "Assert failed: " (cljs.core/pr-str '~x)))))))
+          (throw (js/Error. ~(core/str "Assert failed: " (core/pr-str x)))))))
   ([x message]
      (core/when *assert*
        `(when-not ~x
           (throw (js/Error.
-                  (cljs.core/str "Assert failed: " ~message "\n" (cljs.core/pr-str '~x))))))))
+                  (cljs.core/str "Assert failed: " ~message "\n" ~(core/pr-str x))))))))
 
 (core/defmacro for
   "List comprehension. Takes a vector of one or more
@@ -2327,17 +2359,31 @@
       assoc :tag 'array)))
 
 (core/defmacro make-array
-  [size]
-  (vary-meta
-    (if (core/number? size)
-      `(array ~@(take size (repeat nil)))
-      `(js/Array. ~size))
-    assoc :tag 'array))
+  ([size]
+   (vary-meta
+     (if (core/number? size)
+       `(array ~@(take size (repeat nil)))
+       `(js/Array. ~size))
+     assoc :tag 'array))
+  ([type size]
+   `(make-array ~size))
+  ([type size & more-sizes]
+   (vary-meta
+     `(let [dims#     (list ~@more-sizes)
+            dimarray# (make-array ~size)]
+        (dotimes [i# (alength dimarray#)]
+          (aset dimarray# i# (apply make-array nil dims#)))
+        dimarray#)
+     assoc :tag 'array)))
 
 (core/defmacro list
-  ([] '(.-EMPTY cljs.core/List))
+  ([]
+   '(.-EMPTY cljs.core/List))
   ([x & xs]
-    `(-conj (list ~@xs) ~x)))
+   (if (= :constant (:op (cljs.analyzer/analyze &env x)))
+     `(-conj (list ~@xs) ~x)
+     `(let [x# ~x]
+        (-conj (list ~@xs) x#)))))
 
 (core/defmacro vector
   ([] '(.-EMPTY cljs.core/PersistentVector))
@@ -2724,7 +2770,7 @@
                (copy-arguments args#)
                (let [argseq# (when (< ~c-1 (alength args#))
                                (new ^::ana/no-resolve cljs.core/IndexedSeq
-                                 (.slice args# ~c-1) 0))]
+                                 (.slice args# ~c-1) 0 nil))]
                  (. ~rname
                    (~'cljs$core$IFn$_invoke$arity$variadic ~@(dest-args c-1) argseq#))))))
          ~(variadic-fn* rname method)))))
@@ -2781,7 +2827,7 @@
                 ~@(mapcat #(fixed-arity rname %) sigs)
                 ~(if variadic
                    `(let [argseq# (new ^::ana/no-resolve cljs.core/IndexedSeq
-                                    (.slice ~args-sym ~maxfa) 0)]
+                                    (.slice ~args-sym ~maxfa) 0 nil)]
                       (. ~rname
                         (~'cljs$core$IFn$_invoke$arity$variadic
                           ~@(dest-args maxfa)
@@ -2922,4 +2968,5 @@
       (cons `defn decl)
       (core/list 'set! `(. ~name ~'-cljs$lang$macro) true))))
 
-#?(:cljs (set! (. defmacro -cljs$lang$macro) true))
+#?(:clj  (. (var defmacro) (setMacro))
+   :cljs (set! (. defmacro -cljs$lang$macro) true))

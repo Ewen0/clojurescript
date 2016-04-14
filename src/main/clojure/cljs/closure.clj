@@ -64,6 +64,7 @@
            [javax.xml.bind DatatypeConverter]
            [java.nio.file Path Paths Files StandardWatchEventKinds WatchKey
                           WatchEvent FileVisitor FileVisitResult]
+           [java.nio.charset Charset StandardCharsets]
            [com.sun.nio.file SensitivityWatchEventModifier]
            [com.google.common.base Throwables]))
 
@@ -160,6 +161,37 @@
    :unknown-defines DiagnosticGroups/UNKNOWN_DEFINES
    :visiblity DiagnosticGroups/VISIBILITY})
 
+(def known-opts
+  "Set of all known compiler options."
+  #{:anon-fn-naming-policy :asset-path :cache-analysis :closure-defines :closure-extra-annotations
+    :closure-warnings :compiler-stats :dump-core :elide-asserts :externs :foreign-libs
+    :hashbang :language-in :language-out :libs :main :modules :source-map-path :optimizations
+    :optimize-constants :output-dir :output-to :output-wrapper :parallel-build :preamble
+    :pretty-print :print-input-delimiter :pseudo-names :recompile-dependents :source-map
+    :source-map-inline :source-map-timestamp :static-fns :target :verbose :warnings
+    :emit-constants :ups-externs :ups-foreign-libs :ups-libs :warning-handlers})
+
+(def string->charset
+  {"iso-8859-1" StandardCharsets/ISO_8859_1
+   "us-ascii"   StandardCharsets/US_ASCII
+   "utf-16"     StandardCharsets/UTF_16
+   "utf-16be"   StandardCharsets/UTF_16BE
+   "utf-16le"   StandardCharsets/UTF_16LE
+   "utf-8"      StandardCharsets/UTF_8})
+
+(defn to-charset [charset]
+  (cond
+    (instance? Charset charset) charset
+    (and (string? charset)
+         (contains? string->charset (string/lower-case charset)))
+    (get string->charset (string/lower-case charset))
+    :else
+    (throw
+      (ex-info
+        (str "Invalid :closure-output-charset " charset " given, only "
+             (string/join ", " (keys string->charset)) " supported ")
+        {}))))
+
 (defn set-options
   "TODO: Add any other options that we would like to support."
   [opts ^CompilerOptions compiler-options]
@@ -210,6 +242,11 @@
   (when (contains? opts :closure-extra-annotations)
     (. compiler-options
       (setExtraAnnotationNames (map name (:closure-extra-annotations opts)))))
+
+  (. compiler-options
+    (setOutputCharset (:closure-output-charset opts "UTF-8"))
+    #_(setOutputCharset (to-charset (:closure-output-charset opts "UTF-8"))) ;; only works > 20160125 Closure Compiler
+    )
 
   compiler-options)
 
@@ -582,17 +619,23 @@
   (js-dependencies {:libs ["closure/library/third_party/closure"]} ["goog.dom.query"])
   )
 
+(defn- add-core-macros-if-cljs-js
+  "If a compiled entity is the cljs.js namespace, explicitly
+  add the cljs.core macros namespace dependency to it."
+  [compiled]
+  (cond-> compiled
+    ;; TODO: IJavaScript :provides :requires should really
+    ;; always be Vector<MungedString> - David
+    (= ["cljs.js"] (into [] (map str) (deps/-provides compiled)))
+    (update-in [:requires] concat ["cljs.core$macros"])))
+
 (defn get-compiled-cljs
   "Return an IJavaScript for this file. Compiled output will be
    written to the working directory."
   [opts {:keys [relative-path uri]}]
   (let [js-file  (comp/rename-to-js relative-path)
         compiled (-compile uri (merge opts {:output-file js-file}))]
-    (cond-> compiled
-      ;; TODO: IJavaScript :provides :requires should really
-      ;; always be Vector<MungedString> - David
-      (= ["cljs.js"] (into [] (map str) (deps/-provides compiled)))
-      (update-in [:requires] concat ["cljs.core$macros"]))))
+    (add-core-macros-if-cljs-js compiled)))
 
 (defn cljs-source-for-namespace
   "Given a namespace return the corresponding source with either a .cljs or
@@ -1884,7 +1927,10 @@
            (let [one-file? (and (:main all-opts)
                                 (#{:advanced :simple} (:optimizations all-opts)))
                  source (if one-file?
-                          (:uri (cljs-source-for-namespace (:main all-opts)))
+                          (let [main (:main all-opts)
+                                uri  (:uri (cljs-source-for-namespace main))]
+                            (assert uri (str "No file for namespace " main " exists"))
+                            uri)
                           source)
                  compile-opts (if one-file?
                                 (assoc all-opts :output-file (:output-to all-opts))
@@ -1893,6 +1939,7 @@
                                 (add-dependency-sources compile-opts)
                                 deps/dependency-order
                                 (compile-sources compiler-stats compile-opts)
+                                (#(map add-core-macros-if-cljs-js %))
                                 (add-js-sources all-opts)
                                 (cond-> (= :nodejs (:target all-opts)) (concat [(-compile (io/resource "cljs/nodejs.cljs") all-opts)]))
                                 deps/dependency-order

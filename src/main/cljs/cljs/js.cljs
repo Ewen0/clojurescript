@@ -38,6 +38,12 @@
                    0 (- (count file) 5))]
     (symbol (demunge lib-name))))
 
+(defn- resolve-symbol
+  [sym]
+  (if (string/starts-with? (str sym) ".")
+    sym
+    (ana/resolve-symbol sym)))
+
 (defn- atom? [x]
   (instance? Atom x))
 
@@ -151,6 +157,10 @@
             "\n//# sourceMappingURL=data:application/json;base64,"
             (base64/encodeString json)))))
 
+(defn- current-alias-map
+  []
+  (get-in @env/*compiler* [:cljs.analyzer/namespaces ana/*cljs-ns* :requires]))
+
 ;; -----------------------------------------------------------------------------
 ;; Analyze
 
@@ -212,8 +222,8 @@
    (let [bound-vars (merge
                       {:*compiler*     (env/default-compiler-env)
                        :*data-readers* tags/*cljs-data-readers*
-                       :*load-macros*  (or (:load-macros opts) true)
-                       :*analyze-deps* (or (:analyze-deps opts) true)
+                       :*load-macros*  (:load-macros opts true)
+                       :*analyze-deps* (:analyze-deps opts true)
                        :*load-fn*      (or (:load opts) *load-fn*)
                        :*eval-fn*      (or (:eval opts) *eval-fn*)}
                       bound-vars)
@@ -267,7 +277,7 @@
                                        (if (:error res)
                                          (cb res)
                                          (do
-                                           (swap! *loaded* conj name)
+                                           (swap! *loaded* conj aname)
                                            (cb {:value true}))))))))))
                      (cb (wrap-error
                            (ana/error env
@@ -443,8 +453,9 @@
                  ana/*cljs-static-fns*  (:static-fns opts)
                  *ns*                   (create-ns ns)
                  ana/*passes*           (:*passes* bound-vars)
+                 r/*alias-map*          (current-alias-map)
                  r/*data-readers*       (:*data-readers* bound-vars)
-                 r/resolve-symbol       ana/resolve-symbol
+                 r/resolve-symbol       resolve-symbol
                  comp/*source-map-data* (:*sm-data* bound-vars)]
          (let [res (try
                      {:value (r/read {:eof eof :read-cond :allow :features #{:cljs}} rdr)}
@@ -512,8 +523,8 @@
      {:*compiler*     state
       :*data-readers* tags/*cljs-data-readers*
       :*passes*       (or (:passes opts) ana/*passes*)
-      :*analyze-deps* (or (:analyze-deps opts) true)
-      :*load-macros*  (or (:load-macros opts) true)
+      :*analyze-deps* (:analyze-deps opts true)
+      :*load-macros*  (:load-macros opts true)
       :*load-fn*      (or (:load opts) *load-fn*)
       :*eval-fn*      (or (:eval opts) *eval-fn*)}
      source name opts cb)))
@@ -530,8 +541,9 @@
               ana/*cljs-ns*          (:*cljs-ns* bound-vars)
               ana/*cljs-static-fns*  (:static-fns opts)
               *ns*                   (create-ns (:*cljs-ns* bound-vars))
+              r/*alias-map*          (current-alias-map)
               r/*data-readers*       (:*data-readers* bound-vars)
-              r/resolve-symbol       ana/resolve-symbol
+              r/resolve-symbol       resolve-symbol
               comp/*source-map-data* (:*sm-data* bound-vars)]
       (let [aenv (ana/empty-env)
             aenv (cond-> (assoc aenv :ns (ana/get-namespace ana/*cljs-ns*))
@@ -582,8 +594,8 @@
    (eval*
      {:*compiler*     state
       :*data-readers* tags/*cljs-data-readers*
-      :*analyze-deps* (or (:analyze-deps opts) true)
-      :*load-macros*  (or (:load-macros opts) true)
+      :*analyze-deps* (:analyze-deps opts true)
+      :*load-macros*  (:load-macros opts true)
       :*load-fn*      (or (:load opts) *load-fn*)
       :*eval-fn*      (or (:eval opts) *eval-fn*)}
      form opts cb)))
@@ -605,8 +617,9 @@
                  ana/*cljs-ns*          ns
                  ana/*cljs-static-fns*  (:static-fns opts)
                  *ns*                   (create-ns ns)
+                 r/*alias-map*          (current-alias-map)
                  r/*data-readers*       (:*data-readers* bound-vars)
-                 r/resolve-symbol       ana/resolve-symbol
+                 r/resolve-symbol       resolve-symbol
                  comp/*source-map-data* (:*sm-data* bound-vars)]
          (let [res (try
                      {:value (r/read {:eof eof :read-cond :allow :features #{:cljs}} rdr)}
@@ -621,20 +634,23 @@
                  (let [aenv (cond-> (assoc aenv :ns (ana/get-namespace ana/*cljs-ns*))
                               (:context opts) (assoc :context (:context opts))
                               (:def-emits-var opts) (assoc :def-emits-var true))
-                       ast  (try
-                              (ana/analyze aenv form nil opts)
+                       res  (try
+                              {:value (ana/analyze aenv form nil opts)}
                               (catch :default cause
                                 (wrap-error
                                   (ana/error aenv
                                     (str "Could not compile " name) cause))))]
-                   (.append sb (with-out-str (comp/emit ast)))
-                   (if (= :ns (:op ast))
-                     (ns-side-effects bound-vars aenv ast opts
-                       (fn [res]
-                         (if (:error res)
-                           (cb res)
-                           (compile-loop (:name ast)))))
-                     (recur ns)))
+                   (if (:error res)
+                     (cb res)
+                     (let [ast (:value res)]
+                       (.append sb (with-out-str (comp/emit ast)))
+                       (if (= :ns (:op ast))
+                         (ns-side-effects bound-vars aenv ast opts
+                           (fn [res]
+                             (if (:error res)
+                               (cb res)
+                               (compile-loop (:name ast)))))
+                         (recur ns)))))
                  (do
                    (when (:source-map opts)
                      (append-source-map env/*compiler*
@@ -674,8 +690,8 @@
    (compile-str*
      {:*compiler*     state
       :*data-readers* tags/*cljs-data-readers*
-      :*analyze-deps* (or (:analyze-deps opts) true)
-      :*load-macros*  (or (:load-macros opts) true)
+      :*analyze-deps* (:analyze-deps opts true)
+      :*load-macros*  (:load-macros opts true)
       :*load-fn*      (or (:load opts) *load-fn*)
       :*eval-fn*      (or (:eval opts) *eval-fn*)
       :*sm-data*      (when (:source-map opts) (sm-data))}
@@ -700,8 +716,9 @@
                  ana/*cljs-ns*          ns
                  ana/*cljs-static-fns*  (:static-fns opts)
                  *ns*                   (create-ns ns)
+                 r/*alias-map*          (current-alias-map)
                  r/*data-readers*       (:*data-readers* bound-vars)
-                 r/resolve-symbol       ana/resolve-symbol
+                 r/resolve-symbol       resolve-symbol
                  comp/*source-map-data* (:*sm-data* bound-vars)]
          (let [res (try
                      {:value (r/read {:eof eof :read-cond :allow :features #{:cljs}} rdr)}
@@ -729,7 +746,7 @@
                       (if (= :ns (:op ast))
                         (do
                           (.append sb
-                            (str "goog.provide(\"" (munge (:name ast)) "\");\n"))
+                            (with-out-str (comp/emitln (str "goog.provide(\"" (munge (:name ast)) "\");"))))
                           (ns-side-effects true bound-vars aenv ast opts
                             (fn [res]
                               (if (:error res)
@@ -804,8 +821,8 @@
    (eval-str*
      {:*compiler*     state
       :*data-readers* tags/*cljs-data-readers*
-      :*analyze-deps* (or (:analyze-deps opts) true)
-      :*load-macros*  (or (:load-macros opts) true)
+      :*analyze-deps* (:analyze-deps opts true)
+      :*load-macros*  (:load-macros opts true)
       :*load-fn*      (or (:load opts) *load-fn*)
       :*eval-fn*      (or (:eval opts) *eval-fn*)}
      source name opts cb)))
