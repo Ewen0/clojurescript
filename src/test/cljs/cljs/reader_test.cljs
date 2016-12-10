@@ -1,3 +1,11 @@
+;; Copyright (c) Rich Hickey. All rights reserved.
+;; The use and distribution terms for this software are covered by the
+;; Eclipse Public License 1.0 (http://opensource.org/licenses/eclipse-1.0.php)
+;; which can be found in the file epl-v10.html at the root of this distribution.
+;; By using this software in any fashion, you are agreeing to be bound by
+;; the terms of this license.
+;; You must not remove this notice, or any other, from this software.
+
 (ns cljs.reader-test
   (:require [cljs.test :refer-macros [deftest testing is]]
             [cljs.reader :as reader]
@@ -173,6 +181,14 @@
         m  (re-find re " \u00a1   ")]
     (testing "Testing reading, CLJS-819"
       (is (= m " \u00a1")))))
+
+(deftest testing-map-type
+  (let [a  (reader/read-string "{:a 1 :b 2 :c 3}")
+        b  (reader/read-string "{:a 1 :b 2 :c 3 :d 4 :e 5 :f 6 :g 7 :h 8 :i 9}")]
+    (is (= a {:a 1 :b 2 :c 3}))
+    (is (instance? PersistentArrayMap a))
+    (is (= b {:a 1 :b 2 :c 3 :d 4 :e 5 :f 6 :g 7 :h 8 :i 9}))
+    (is (instance? PersistentHashMap b))))
 
 ;; NOTE: issue uncovered by test.check
 

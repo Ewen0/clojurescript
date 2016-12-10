@@ -34,14 +34,17 @@
 
                             cond-> cond->> as-> some-> some->>
 
+                            require use refer-clojure
+
                             if-some when-some test ns-interns ns-unmap var vswap! macroexpand-1 macroexpand
+                            some?
                             #?@(:cljs [alias coercive-not coercive-not= coercive-= coercive-boolean
                                        truth_ js-arguments js-delete js-in js-debugger exists? divide js-mod
                                        unsafe-bit-and bit-shift-right-zero-fill mask bitpos caching-hash
                                        defcurried rfn specify! js-this this-as implements? array js-obj
                                        simple-benchmark gen-apply-to js-str es6-iterable load-file* undefined?
                                        specify copy-arguments goog-define js-comment js-inline-comment
-                                       unsafe-cast])])
+                                       unsafe-cast require-macros use-macros])])
   #?(:cljs (:require-macros [cljs.core :as core]
                             [cljs.support :refer [assert-args]]))
   (:require clojure.walk
@@ -600,7 +603,10 @@
             (seq ret)))
         (core/list (asig fdecl))))))
 
-(core/defmacro defonce [x init]
+(core/defmacro defonce
+  "defs name to have the root value of init iff the named var has no root value,
+  else init is unevaluated"
+  [x init]
   `(when-not (exists? ~x)
      (def ~x ~init)))
 
@@ -609,54 +615,86 @@
              pb (core/fn pb [bvec b v]
                   (core/let [pvec
                              (core/fn [bvec b val]
-                               (core/let [gvec (gensym "vec__")]
-                                 (core/loop [ret (core/-> bvec (conj gvec) (conj val))
+                               (core/let [gvec (gensym "vec__")
+                                          gseq (gensym "seq__")
+                                          gfirst (gensym "first__")
+                                          has-rest (some #{'&} b)]
+                                 (core/loop [ret (core/let [ret (conj bvec gvec val)]
+                                                   (if has-rest
+                                                     (conj ret gseq (core/list `seq gvec))
+                                                     ret))
                                              n 0
                                              bs b
                                              seen-rest? false]
                                    (if (seq bs)
                                      (core/let [firstb (first bs)]
                                        (core/cond
-                                         (= firstb '&) (recur (pb ret (second bs) (core/list `nthnext gvec n))
-                                                         n
-                                                         (nnext bs)
-                                                         true)
+                                         (= firstb '&) (recur (pb ret (second bs) gseq)
+                                                              n
+                                                              (nnext bs)
+                                                              true)
                                          (= firstb :as) (pb ret (second bs) gvec)
                                          :else (if seen-rest?
-                                                 (throw
-                                                   #?(:clj (new Exception "Unsupported binding form, only :as can follow & parameter")
-                                                      :cljs (new js/Error "Unsupported binding form, only :as can follow & parameter")))
-                                                 (recur (pb ret firstb (core/list `nth gvec n nil))
-                                                   (core/inc n)
-                                                   (next bs)
-                                                   seen-rest?))))
+                                                 (throw #?(:clj (new Exception "Unsupported binding form, only :as can follow & parameter")
+                                                           :cljs (new js/Error "Unsupported binding form, only :as can follow & parameter")))
+                                                 (recur (pb (if has-rest
+                                                              (conj ret
+                                                                    gfirst `(first ~gseq)
+                                                                    gseq `(next ~gseq))
+                                                              ret)
+                                                            firstb
+                                                            (if has-rest
+                                                              gfirst
+                                                              (core/list `nth gvec n nil)))
+                                                        (core/inc n)
+                                                        (next bs)
+                                                        seen-rest?))))
                                      ret))))
                              pmap
                              (core/fn [bvec b v]
                                (core/let [gmap (gensym "map__")
                                           defaults (:or b)]
                                  (core/loop [ret (core/-> bvec (conj gmap) (conj v)
-                                                   (conj gmap) (conj `(if (implements? ISeq ~gmap) (apply hash-map ~gmap) ~gmap))
-                                                   ((core/fn [ret]
-                                                      (if (:as b)
-                                                        (conj ret (:as b) gmap)
-                                                        ret))))
-                                             bes (reduce
-                                                   (core/fn [bes entry]
-                                                     (reduce #(assoc %1 %2 ((val entry) %2))
-                                                       (dissoc bes (key entry))
-                                                       ((key entry) bes)))
-                                                   (dissoc b :as :or)
-                                                   {:keys #(if (core/keyword? %) % (keyword (core/str %))),
-                                                    :strs core/str, :syms #(core/list `quote %)})]
+                                                          (conj gmap) (conj `(if (implements? ISeq ~gmap) (apply cljs.core/hash-map ~gmap) ~gmap))
+                                                     ((core/fn [ret]
+                                                        (if (:as b)
+                                                          (conj ret (:as b) gmap)
+                                                          ret))))
+                                             bes (core/let [transforms
+                                                            (reduce
+                                                              (core/fn [transforms mk]
+                                                                (if (core/keyword? mk)
+                                                                  (core/let [mkns (namespace mk)
+                                                                        mkn (name mk)]
+                                                                    (core/cond (= mkn "keys") (assoc transforms mk #(keyword (core/or mkns (namespace %)) (name %)))
+                                                                               (= mkn "syms") (assoc transforms mk #(core/list `quote (symbol (core/or mkns (namespace %)) (name %))))
+                                                                               (= mkn "strs") (assoc transforms mk core/str)
+                                                                               :else transforms))
+                                                                  transforms))
+                                                              {}
+                                                              (keys b))]
+                                                   (reduce
+                                                     (core/fn [bes entry]
+                                                       (reduce #(assoc %1 %2 ((val entry) %2))
+                                                         (dissoc bes (key entry))
+                                                         ((key entry) bes)))
+                                                     (dissoc b :as :or)
+                                                     transforms))]
                                    (if (seq bes)
                                      (core/let [bb (key (first bes))
                                                 bk (val (first bes))
-                                                has-default (contains? defaults bb)]
-                                       (recur (pb ret bb (if has-default
-                                                           (core/list `get gmap bk (defaults bb))
-                                                           (core/list `get gmap bk)))
-                                         (next bes)))
+                                                local (if #?(:clj  (core/instance? clojure.lang.Named bb)
+                                                             :cljs (cljs.core/implements? INamed bb))
+                                                          (with-meta (symbol nil (name bb)) (meta bb))
+                                                        bb)
+                                                bv (if (contains? defaults local)
+                                                     (core/list 'cljs.core/get gmap bk (defaults local))
+                                                     (core/list 'cljs.core/get gmap bk))]
+                                       (recur
+                                         (if (core/or (core/keyword? bb) (core/symbol? bb)) ;(ident? bb)
+                                           (core/-> ret (conj local bv))
+                                           (pb ret bb bv))
+                                              (next bes)))
                                      ret))))]
                     (core/cond
                       (core/symbol? b) (core/-> bvec (conj (if (namespace b) (symbol (name b)) b)) (conj v))
@@ -664,8 +702,8 @@
                       (vector? b) (pvec bvec b v)
                       (map? b) (pmap bvec b v)
                       :else (throw
-                              #?(:clj (new Exception (core/str "Unsupported binding form: " b))
-                                 :cljs (new js/Error (core/str "Unsupported binding form: " b)))))))
+                             #?(:clj (new Exception (core/str "Unsupported binding form: " b))
+                                :cljs (new js/Error (core/str "Unsupported binding form: " b)))))))
              process-entry (core/fn [bvec b] (pb bvec (first b) (second b)))]
     (if (every? core/symbol? (map first bents))
       bindings
@@ -755,7 +793,8 @@
           (iterate (core/fn [[p b]]
                      (if (core/== 2147483648 b)
                        [(core/inc p) 1]
-                       [p (core/bit-shift-left b 1)]))
+                       [p #?(:clj  (core/bit-shift-left b 1)
+                             :cljs (core/* 2 b))]))
                    [0 1])))
 
 (def fast-path-protocol-partitions-count
@@ -818,6 +857,9 @@
 
 (core/defmacro nil? [x]
   `(coercive-= ~x nil))
+
+(core/defmacro some? [x]
+  `(not (nil? ~x)))
 
 ;; internal - do not use.
 (core/defmacro coercive-not [x]
@@ -1359,9 +1401,10 @@
        ~@body)))
 
 (core/defn- adapt-proto-params [type [[this & args :as sig] & body]]
-  `(~(vec (cons (vary-meta this assoc :tag type) args))
-     (this-as ~this
-       ~@body)))
+  (core/let [this' (vary-meta this assoc :tag type)]
+    `(~(vec (cons this' args))
+      (this-as ~this'
+        ~@body))))
 
 (core/defn- add-obj-methods [type type-sym sigs]
   (map (core/fn [[f & meths :as form]]
@@ -1391,7 +1434,7 @@
              `(fn ~[this-sym argsym]
                 (this-as ~this-sym
                   (.apply (.-call ~this-sym) ~this-sym
-                    (.concat (array ~this-sym) (aclone ~argsym)))))
+                    (.concat (array ~this-sym) (cljs.core/aclone ~argsym)))))
              (meta form)))]
       (ifn-invoke-methods type type-sym form))))
 
@@ -1416,7 +1459,7 @@
       (add-obj-methods type type-sym sigs)
       (concat
         (core/when-not (skip-flag psym)
-          [`(set! ~(extend-prefix type-sym pprefix) true)])
+          [`(set! ~(extend-prefix type-sym pprefix) cljs.core/PROTOCOL_SENTINEL)])
         (mapcat
           (core/fn [sig]
             (if (= psym 'cljs.core/IFn)
@@ -1714,7 +1757,7 @@
                         `(~'-lookup [this# ~ksym else#]
                            (case ~ksym
                              ~@(mapcat (core/fn [f] [(keyword f) f]) base-fields)
-                             (get ~'__extmap ~ksym else#)))
+                             (cljs.core/get ~'__extmap ~ksym else#)))
                         'ICounted
                         `(~'-count [this#] (+ ~(count base-fields) (count ~'__extmap)))
                         'ICollection
@@ -1742,7 +1785,10 @@
                                                 ~'__extmap)))
 
                         'IIterable
-                        `(~'-iterator [~gs] (RecordIter. 0 ~gs ~(count base-fields) [~@(map keyword base-fields)]  (-iterator ~'__extmap) ))
+                        `(~'-iterator [~gs]
+                          (RecordIter. 0 ~gs ~(count base-fields) [~@(map keyword base-fields)] (if ~'__extmap
+                                                                                                  (-iterator ~'__extmap)
+                                                                                                  (core/nil-iter))))
 
                         'IPrintWithWriter
                         `(~'-pr-writer [this# writer# opts#]
@@ -1900,20 +1946,27 @@
                                 (core/str "Invalid protocol, " psym
                                   " defines method " mname " with arity 0"))))))
              expand-sig (core/fn [fname slot sig]
-                          `(~sig
-                             (if (and (not (nil? ~(first sig)))
-                                      (not (nil? (. ~(first sig) ~(symbol (core/str "-" slot)))))) ;; Property access needed here.
-                               (. ~(first sig) ~slot ~@sig)
-                               (let [x# (if (nil? ~(first sig)) nil ~(first sig))
-                                     m# (aget ~(fqn fname) (goog/typeOf x#))]
-                                 (if-not (nil? m#)
-                                   (m# ~@sig)
-                                   (let [m# (aget ~(fqn fname) "_")]
-                                     (if-not (nil? m#)
-                                       (m# ~@sig)
-                                       (throw
-                                         (missing-protocol
-                                           ~(core/str psym "." fname) ~(first sig))))))))))
+                          (core/let [sig (core/if-not (every? core/symbol? sig)
+                                           (mapv (core/fn [arg]
+                                                   (core/cond
+                                                     (core/symbol? arg) arg
+                                                     (core/and (map? arg) (core/some? (:as arg))) (:as arg)
+                                                     :else (gensym))) sig)
+                                           sig)]
+                            `(~sig
+                              (if (and (not (nil? ~(first sig)))
+                                    (not (nil? (. ~(first sig) ~(symbol (core/str "-" slot)))))) ;; Property access needed here.
+                                (. ~(first sig) ~slot ~@sig)
+                                (let [x# (if (nil? ~(first sig)) nil ~(first sig))
+                                      m# (aget ~(fqn fname) (goog/typeOf x#))]
+                                  (if-not (nil? m#)
+                                    (m# ~@sig)
+                                    (let [m# (aget ~(fqn fname) "_")]
+                                      (if-not (nil? m#)
+                                        (m# ~@sig)
+                                        (throw
+                                          (missing-protocol
+                                            ~(core/str psym "." fname) ~(first sig)))))))))))
              psym (core/-> psym
                     (vary-meta update-in [:jsdoc] conj
                       "@interface")
@@ -1966,13 +2019,13 @@
       `(let [~xsym ~x]
          (if ~xsym
            (if (or ~(if bit `(unsafe-bit-and (. ~xsym ~msym) ~bit) false)
-                   ~(bool-expr `(. ~xsym ~(symbol (core/str "-" prefix)))))
+                    (identical? cljs.core/PROTOCOL_SENTINEL (. ~xsym ~(symbol (core/str "-" prefix)))))
              true
              false)
            false))
       `(if-not (nil? ~x)
          (if (or ~(if bit `(unsafe-bit-and (. ~x ~msym) ~bit) false)
-                 ~(bool-expr `(. ~x ~(symbol (core/str "-" prefix)))))
+                  (identical? cljs.core/PROTOCOL_SENTINEL (. ~x ~(symbol (core/str "-" prefix)))))
            true
            false)
          false))))
@@ -1992,7 +2045,7 @@
       `(let [~xsym ~x]
          (if-not (nil? ~xsym)
            (if (or ~(if bit `(unsafe-bit-and (. ~xsym ~msym) ~bit) false)
-                   ~(bool-expr `(. ~xsym ~(symbol (core/str "-" prefix)))))
+                    (identical? cljs.core/PROTOCOL_SENTINEL (. ~xsym ~(symbol (core/str "-" prefix)))))
              true
              (if (coercive-not (. ~xsym ~msym))
                (cljs.core/native-satisfies? ~psym ~xsym)
@@ -2000,7 +2053,7 @@
            (cljs.core/native-satisfies? ~psym ~xsym)))
       `(if-not (nil? ~x)
          (if (or ~(if bit `(unsafe-bit-and (. ~x ~msym) ~bit) false)
-                 ~(bool-expr `(. ~x ~(symbol (core/str "-" prefix)))))
+                  (identical? cljs.core/PROTOCOL_SENTINEL (. ~x ~(symbol (core/str "-" prefix)))))
            true
            (if (coercive-not (. ~x ~msym))
              (cljs.core/native-satisfies? ~psym ~x)
@@ -2366,13 +2419,13 @@
        `(js/Array. ~size))
      assoc :tag 'array))
   ([type size]
-   `(make-array ~size))
+   `(cljs.core/make-array ~size))
   ([type size & more-sizes]
    (vary-meta
      `(let [dims#     (list ~@more-sizes)
-            dimarray# (make-array ~size)]
+            dimarray# (cljs.core/make-array ~size)]
         (dotimes [i# (alength dimarray#)]
-          (aset dimarray# i# (apply make-array nil dims#)))
+          (aset dimarray# i# (apply cljs.core/make-array nil dims#)))
         dimarray#)
      assoc :tag 'array)))
 
@@ -2471,7 +2524,7 @@
   array ret."
   [a idx ret expr]
   `(let [a# ~a
-         ~ret (aclone a#)]
+         ~ret (cljs.core/aclone a#)]
      (loop  [~idx 0]
        (if (< ~idx  (alength a#))
          (do
@@ -2556,7 +2609,7 @@
                prefer-table# (atom {})
                method-cache# (atom {})
                cached-hierarchy# (atom {})
-               hierarchy# (get ~options :hierarchy (cljs.core/get-global-hierarchy))]
+               hierarchy# (cljs.core/get ~options :hierarchy (cljs.core/get-global-hierarchy))]
            (cljs.core/MultiFn. (cljs.core/symbol ~mm-ns ~(name mm-name)) ~dispatch-fn ~default hierarchy#
              method-table# prefer-table# method-cache# cached-hierarchy#))))))
 
@@ -2676,6 +2729,110 @@
   [vol f & args]
   `(-vreset! ~vol (~f (-deref ~vol) ~@args)))
 
+(core/defmacro locking
+  [x & forms]
+  `(do ~@forms))
+
+(core/defmacro require
+  "Loads libs, skipping any that are already loaded. Each argument is
+  either a libspec that identifies a lib or a flag that modifies how all the identified
+  libs are loaded. Use :require in the ns macro in preference to calling this
+  directly.
+
+  Libs
+
+  A 'lib' is a named set of resources in classpath whose contents define a
+  library of ClojureScript code. Lib names are symbols and each lib is associated
+  with a ClojureScript namespace. A lib's name also locates its root directory
+  within classpath using Java's package name to classpath-relative path mapping.
+  All resources in a lib should be contained in the directory structure under its
+  root directory. All definitions a lib makes should be in its associated namespace.
+
+  'require loads a lib by loading its root resource. The root resource path
+  is derived from the lib name in the following manner:
+  Consider a lib named by the symbol 'x.y.z; it has the root directory
+  <classpath>/x/y/, and its root resource is <classpath>/x/y/z.clj. The root
+  resource should contain code to create the lib's namespace (usually by using
+  the ns macro) and load any additional lib resources.
+
+  Libspecs
+
+  A libspec is a lib name or a vector containing a lib name followed by
+  options expressed as sequential keywords and arguments.
+
+  Recognized options:
+  :as takes a symbol as its argument and makes that symbol an alias to the
+    lib's namespace in the current namespace.
+  :refer takes a list of symbols to refer from the namespace..
+  :refer-macros takes a list of macro symbols to refer from the namespace.
+  :include-macros true causes macros from the namespace to be required.
+  :rename specifies a map from referred var names to different
+    symbols (and can be used to prevent clashes)
+
+
+  Flags
+
+  A flag is a keyword.
+  Recognized flags: :reload, :reload-all, :verbose
+  :reload forces loading of all the identified libs even if they are
+    already loaded
+  :reload-all implies :reload and also forces loading of all libs that the
+    identified libs directly or indirectly load via require or use
+  :verbose triggers printing information about each load, alias, and refer
+
+  Example:
+
+  The following would load the library clojure.string :as string.
+
+  (require '[clojure/string :as string])"
+  [& args]
+  `(~'ns* ~(cons :require args)))
+
+(core/defmacro require-macros
+  "Similar to require but only for macros."
+  [& args]
+  `(~'ns* ~(cons :require-macros args)))
+
+(core/defmacro use
+  "Like require, but referring vars specified by the mandatory
+  :only option.
+
+  Example:
+
+  The following would load the library clojure.set while referring
+  the intersection var.
+
+  (use '[clojure.set :only [intersection]])"
+  [& args]
+  `(~'ns* ~(cons :use args)))
+
+(core/defmacro use-macros
+  "Similar to use but only for macros."
+  [& args]
+  `(~'ns* ~(cons :use-macros args)))
+
+(core/defmacro import
+  "import-list => (closure-namespace constructor-name-symbols*)
+
+  For each name in constructor-name-symbols, adds a mapping from name to the
+  constructor named by closure-namespace to the current namespace. Use :import in the ns
+  macro in preference to calling this directly."
+  [& import-symbols-or-lists]
+  `(~'ns* ~(cons :import import-symbols-or-lists)))
+
+(core/defmacro refer-clojure
+  "Refers to all the public vars of `cljs.core`, subject to
+  filters.
+  Filters can include at most one each of:
+
+  :exclude list-of-symbols
+  :rename map-of-fromsymbol-tosymbol
+
+  Filters can be used to select a subset, via exclusion, or to provide a mapping
+  to a symbol different from the var's name, in order to prevent clashes."
+  [& args]
+  `(~'ns* ~(cons :refer-clojure args)))
+
 ;; INTERNAL - do not use, only for Node.js
 (core/defmacro load-file* [f]
   `(. js/goog (~'nodeGlobalRequire ~f)))
@@ -2687,7 +2844,9 @@
   (core/assert (core/= (core/first quoted) 'quote)
     "Argument to macroexpand-1 must be quoted")
   (core/let [form (second quoted)]
-    `(quote ~(ana/macroexpand-1 &env form))))
+    (if (seq? form)
+      `(quote ~(ana/macroexpand-1 &env form))
+      form)))
 
 (core/defmacro macroexpand
   "Repeatedly calls macroexpand-1 on form until it no longer
@@ -2698,10 +2857,12 @@
     "Argument to macroexpand must be quoted")
   (core/let [form (second quoted)
              env &env]
-    (core/loop [form form form' (ana/macroexpand-1 env form)]
-      (core/if-not (core/identical? form form')
-        (recur form' (ana/macroexpand-1 env form'))
-        `(quote ~form')))))
+    (if (seq? form)
+      (core/loop [form form form' (ana/macroexpand-1 env form)]
+        (core/if-not (core/identical? form form')
+          (recur form' (ana/macroexpand-1 env form'))
+          `(quote ~form')))
+      form)))
 
 (core/defn- multi-arity-fn? [fdecl]
   (core/< 1 (count fdecl)))
@@ -2749,7 +2910,7 @@
          (.push ~dest (aget (js-arguments) i#))
          (recur (inc i#))))))
 
-(core/defn- variadic-fn [name meta [[arglist & body :as method] :as fdecl]]
+(core/defn- variadic-fn [name meta [[arglist & body :as method] :as fdecl] emit-var?]
   (core/letfn [(dest-args [c]
                  (map (core/fn [n] `(aget (js-arguments) ~n))
                    (range c)))]
@@ -2773,7 +2934,8 @@
                                  (.slice args# ~c-1) 0 nil))]
                  (. ~rname
                    (~'cljs$core$IFn$_invoke$arity$variadic ~@(dest-args c-1) argseq#))))))
-         ~(variadic-fn* rname method)))))
+         ~(variadic-fn* rname method)
+         ~(core/when emit-var? `(var ~name))))))
 
 (core/comment
   (require '[clojure.pprint :as pp])
@@ -2783,7 +2945,7 @@
   (pp/pprint (variadic-fn 'foo {} '(([a [b & cs] & xs] xs))))
   )
 
-(core/defn- multi-arity-fn [name meta fdecl]
+(core/defn- multi-arity-fn [name meta fdecl emit-var?]
   (core/letfn [(dest-args [c]
                  (map (core/fn [n] `(aget (js-arguments) ~n))
                    (range c)))
@@ -2839,7 +3001,8 @@
                                (str "Invalid arity: " (alength ~args-sym))))))))))
          ~@(map fn-method fdecl)
          ;; optimization properties
-         (set! (. ~name ~'-cljs$lang$maxFixedArity) ~maxfa)))))
+         (set! (. ~name ~'-cljs$lang$maxFixedArity) ~maxfa)
+         ~(core/when emit-var? `(var ~name))))))
 
 (core/comment
   (require '[clojure.pprint :as pp])
@@ -2908,13 +3071,13 @@
              (multi-arity-fn name
                (if (comp/checking-types?)
                  (update-in m [:jsdoc] conj "@param {...*} var_args")
-                 m) fdecl)
+                 m) fdecl (:def-emits-var &env))
 
              (variadic-fn? fdecl)
              (variadic-fn name
                (if (comp/checking-types?)
                  (update-in m [:jsdoc] conj "@param {...*} var_args")
-                 m) fdecl)
+                 m) fdecl (:def-emits-var &env))
 
              :else
              (core/list 'def (with-meta name m)

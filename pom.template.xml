@@ -29,13 +29,13 @@
         </dependency>
         <dependency>
             <groupId>com.google.javascript</groupId>
-            <artifactId>closure-compiler</artifactId>
-            <version>v20151216</version>
+            <artifactId>closure-compiler-unshaded</artifactId>
+            <version>v20160911</version>
         </dependency>
         <dependency>
             <groupId>org.clojure</groupId>
             <artifactId>google-closure-library</artifactId>
-            <version>0.0-20151016-61277aea</version>
+            <version>0.0-20160609-f42b4a24</version>
         </dependency>
         <dependency>
             <groupId>org.clojure</groupId>
@@ -50,7 +50,31 @@
         <dependency>
             <groupId>org.clojure</groupId>
             <artifactId>tools.reader</artifactId>
-            <version>1.0.0-beta1</version>
+            <version>1.0.0-beta3</version>
+        </dependency>
+        <dependency>
+            <groupId>org.clojure</groupId>
+            <artifactId>test.check</artifactId>
+            <version>0.9.0</version>
+            <scope>test</scope>
+            <exclusions>
+                <exclusion>
+                    <groupId>org.clojure</groupId>
+                    <artifactId>clojure</artifactId>
+                </exclusion>
+            </exclusions>
+        </dependency>
+        <dependency>
+            <groupId>com.cognitect</groupId>
+            <artifactId>transit-clj</artifactId>
+            <version>0.8.285</version>
+            <scope>provided</scope>
+            <exclusions>
+                <exclusion>
+                    <groupId>org.clojure</groupId>
+                    <artifactId>clojure</artifactId>
+                </exclusion>
+            </exclusions>
         </dependency>
     </dependencies>
 
@@ -276,6 +300,9 @@
                                 <namespace>cljs.analyzer.api</namespace>
                                 <namespace>cljs.build.api</namespace>
                                 <namespace>cljs.compiler.api</namespace>
+                                <namespace>cljs.spec</namespace>
+                                <namespace>cljs.spec.test</namespace>
+                                <namespace>cljs.spec.impl.gen</namespace>
                                 <namespace>cljs.repl</namespace>
                                 <namespace>cljs.repl.browser</namespace>
                                 <namespace>cljs.repl.nashorn</namespace>

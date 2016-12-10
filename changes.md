@@ -1,3 +1,237 @@
+## 1.9.293
+
+### Enhancements
+* CLJS-1346: Support require outside of ns
+
+### Changes
+* CLJS-1762: Bump Closure Compiler, refactor module support
+* CLJS-1658: testing for protocol membership may return false positives
+* CLJS-1536: REPL def symbol init collision
+* CLJS-1805: Source map should take false
+* CLJS-1804: Self-host: process namespace side-effects for new require without NS
+* CLJS-1803: Use new require capability in REPLs
+* CLJS-1796: Measure Google Closure specific optimization time
+* CLJS-1782: Self-host: allow namespaces to require their own macros
+* CLJS-1563: :source-map option to cljs.build.api/build should take nil
+* CLJS-1785: Warn on reference to js/foo shadowed by local binding
+
+### Fixes
+* make String an implicit ns like Math. revert char? and clarify docstring. add unit tests for char?
+* fix cljs.spec.test/check docstring
+* CLJS-1826: Self-host: load-deps doesn't honor `:reload` and `reload-all`
+* CLJS-1825: :source-map error when passing `false` under simple optimizations
+* CLJS-1821: `add-preloads` should only touch sources if `:preloads` option specified
+* CLJS-1814: Move docstrings for require, etc. from `cljs.repl` to their new definitions in `cljs.core`
+* CLJS-1809: Add 0/1 arity to `into`
+* CLJS-1824: transit cache feature leaks files
+* CLJS-1294: Let macroexpand(-1) accept any quoted argument.
+* CLJS-1818: (hash false) returns different value from Clojure
+* CLJS-1817: Strange result when assoc'ing 0 to persistent hash map
+* CLJS-1815: Fix failing analyzer tests
+* follow-up on CLJS-460 defmulti ignores optional :hierarchy argument
+* CLJS-1807: Better error messages for `ns*` calls
+* CLJS-1802: Generated namespaces should be of the form `cljs.user.fileXXXX`
+* CLJ-1935: Use multimethod dispatch value method lookup to take hierarchies into account in multi-spec
+* CLJS-1682 :foreign-libs with module conversion does not works properly if it is used form deps.cljs
+* CLJS-1710: spec/double-in not implemented
+* CLJS-1787: Make cljs.spec explain pluggable
+* CLJS-1781: Add cljs.hash-map-test to self-parity tests
+* CLJS-1788: Port CLJ-2004: include retag in multi-spec form
+* CLJS-1765: Empty iterator for hash maps with nil key
+* CLJS-1784: nth doesn't throw on strings or arrays
+* CLJS-1773: Self-host: Don't resolve unqualified symbols / keywords with $macros
+* CLJS-1770: goog-defines broken for integers
+* CLJS-1600: Destructuring defprotocol fn args causes defrecord impls to silently fail
+* CLJS-1335: resolve-macro-var: information missing for macros
+* CLJS-1633: Improve error associated with invalid foreign-libs :file path
+* CLJS-1775: `get` with `nil` returns as if `get` with `0`
+* CLJS-1780: Records without extmaps fail to iterate
+* CLJS-1774: Self-host: Report filenames in warns in test-self-parity
+* CLJS-1779: keyword 2-arity constructor accepts anything for both parameters which leads to different hashing
+
+## 1.9.229
+
+### Fixes
+* CLJS-1772: Dependency index can incorrectly overwrite `.cljs` files with `.cljc` files if both are present
+* pass unconform along on conformer with-gen instead of warning
+
+## 1.9.227
+
+### Fixes
+* CLJS-1763: Defining a var that clashes with `cljs.core` throws a compiler error instead of warning
+
+## 1.9.225
+
+### Fixes
+* CLJS-1759: Errors writing transit analysis cache if parallel build
+* CLJS-1760: Self-host: test-cljs-1757 failing in test-self-parity
+* CLJS-1751: port fix lost type hints in map destructuring
+* CLJS-1756: Add test.check JAR to the bootstrap script
+* CLJS-1757: cljs.spec/exercise-fn doesn't work when passed a quoted symbol
+* CLJS-1754: Add boolean? generator
+* fix REPL regression which removed warnings
+
+## 1.9.216
+
+### Fixes
+* CLJS-1749: Missing `cljs.spec.impl.gen/double*`
+* CLJS-1747: Port `clojure.spec/assert` over to ClojureScript
+* fix CLJS-1663 multi-arity fn instrument regression
+
+## 1.9.211
+
+### Fixes
+* CLJS-1746: Log the result of loading a dependency
+* CLJS-1657: Self-host: Implicit macro loading with alias
+* CLJS-1742: Add docstring for new refer-clojure REPL special
+* CLJS-1274: Allow assignment to namespace-qualified names in current namespace
+* CLJS-1744: rest produces nil for larger maps
+* CLJS-1740: Self-host: Need to port more of CLJS-1733
+* CLJS-1741: Add :rename to :refer-clojure in ns docstring
+* CLJS-1737: Self-host: clojure alias implicit macro use regression
+* invalid cljs.spec/merge res call
+* CLJS-1739: seq on map literal with 9 elements leads to rest producing nil
+* CLJS-1738: Self-host: need to update call to check-use-macros-inferring-missing
+
+## 1.9.198
+
+### Enhancements
+* CLJS-1508: Extend ns form to support :rename option
+* CLJS-1507: Implicit macro loading: macro var inference in :refer
+* CLJS-1692: Autoalias clojure.* to exisiting cljs.* namespaces if
+possible
+* CLJS-1350: Compiler support for browser REPL
+* CLJS-1729: Support `use` special function in REPLs
+* CLJS-1730: Support `refer-clojure` special function in REPLs
+
+### Changes
+* CLJS-1515: Self-host: Allow :file key in cljs.js/*load-fn*
+* add toString implementation to Vars
+* Use a js array to create collections in cljs.reader
+* CLJS-1640: Use the unshaded version of the closure compiler
+* add :browser-repl to list of known opts
+* add browser REPL preload
+* parity with Clojure 1.9.0-alpha10 clojure.spec
+* bump to tools.reader 1.0.0-beta3
+
+### Fixes
+* CLJS-1733: Macro inference issue for macros & runtime vars with the same name
+* CLJS-1735: Self-host: cljs.spec speced-vars instance
+* CLJS-1736: cljs.spec.test: checkable-syms* called with 0-arity
+* CLJS-1708: Self-host: [iu]nstrument-1 needs to qualify [iu]nstrument-1*
+* CLJS-1707: Self-host: with-instrument-disabled needs to qualify *instrument-enabled*
+* CLJS-1732: Add docstrings for new use and use-macros REPL specials
+* CLJS-1720: Qualify symbols and namespaced keywords in spec macros
+* CLJS-1731: Self-host: do_template problem with script/test-self-parity
+* CLJS-1556: Invalid code emit for obj literal
+* CLJS-1607: bug with `specify!` in JS prototypes with `static-fns` true
+* CLJS-1591 avoid analyzing invoke arguments multiple times
+* CLJS-1638: :elide-asserts disables atom validators in :advanced
+* CLJS-1721: 3-arity get-in fails on types which do not implement ILookup
+* CLJS-1728: Update doc for ns for new :rename capability
+* CLJS-1727: Regression when evaluating non-sequential forms at the REPL
+* CLJS-1490: Watch macro files in cljs.build.api/watch
+* CLJS-1719: Port destructuring namespaced keys and symbols
+* CLJS-1653: cljs.spec: keys* causes exception
+* CLJS-1700: Support clojure.* aliasing when not in vector
+* CLJS-1717 remove map from equiv-map
+* CLJS-1716: No longer possible to use same alias for :require-macros and :require
+* Use keyword options in js->clj 1-arg impl
+* Add support for regex in transit for compiler analysis cache
+* Escape non-Latin1 characters before base64 encoding the source-map string
+* CLJS-1698: cljs.spec: every res call needs &env
+* CLJS-1695: Self-host: Port cljs / clojure namespace aliasing
+* CLJS-1697: doc on inferred macros fails
+* CLJS-1699: Update docstring for ns
+* CLJS-1694: Self-host: Port macro var inference in :refer
+
+
+## 1.9.89
+
+### Enhancements
+* CLJS-1688: :preloads compiler option for loading other entry points prior to :main
+* cljs.spec - support gen overrides by name in addition to path
+* cljs.spec - every and every-kv
+
+### Changes
+* added bounded-count
+
+### Fixes
+* missing cljs.spec/fn-specs -> cljs.spec/get-spec in cljs.spec.test ns
+* CLJS-1687: Self-host: cljs.spec: inst-in-range? and int-in-range? need qualification
+* CLJS-1668: cljs.spec: c alias needs expansion in int-in
+
+## 1.9.76
+
+### Enhancements
+* CLJS-1648: Getting Source Info into ex-info data for Analysis Errors
+* cljs.spec updated to Clojure 1.9.0-alpha7 changes
+
+### Changes
+* bump Google Closure Library dep
+* AOT cljs.spec nses
+
+### Fixes
+* CLJS-1679: Self-host: Incorporate spec tests
+* CLJS-1680: Self-host: Don't require items no longer provided by Closure
+* CLJS-1654: cljs.spec: var name in s/fdef non-conformance
+* CLJS-1655: cljs.spec: conformer docstring indicates :clojure.spec/invalid
+* CLJS-1656: Self-host: cljs.spec: speced-vars* fn not resolving
+* CLJS-1661: cljs.spec: non-spec'ed fn var printing
+* compute read/write opts for transit if possible, handle JSValue
+* CLJS-1660: cljs.spec: Always return var from instrument / unstrument
+* CLJS-1671: Bad cljs.spec interactive instrumentation session 
+* CLJS-1664: The filename aux.cljs is a problem on windows.
+* CLJS-1667: bad describe* for and-spec-impl
+* CLJS-1699: Self-host: s/fdef ns-qualify *ns* name field access
+
+## 1.9.36
+
+### Enhancements
+* Write analysis caches as Transit if transit-clj available
+
+### Changes
+* Clojure 1f25347
+* Clojure 47b8d6b
+* Optimize seq (&) destructuring as per commit (0aa3467) of Clojure
+
+### Fixes
+* CLJS-1611: Function arity dispatch returns arity
+* only print specs in REPL if we actually have some
+* CLJS-1663: Calling instrumented multi-arity function causes exception
+* CLJS-1650: `cljs.reader/read-map` now returns array-map/hash-map based on the size of the sequence.
+
+## 1.9.14
+
+### Enhancements
+* clojure.spec ported to cljs.spec
+
+### Fixes
+* CLJS-1649: Possible issue with in cljs.reader or cljs.core/PersistentHashMap
+* CLJS-1647: Rethrow exception from parallel-build
+* CLJS-1642: cljs.core/reductions does not respect 'reduced'
+* CLJS-1635: Var type implements IEquiv but not IHash
+* CLJS-1629: Fix warning about duplicate test-pr-str
+* CLJS-1637: Missing docstrings for a few vars
+
+## 1.8.51
+
+### Changes
+* bump Closure Compiler to v20160315
+* bump tools.reader to 1.0.0-beta1
+* CLJS-1624: Avoid useage of JSC_HOME in test bash scripts
+
+### Enhancements
+* CLJS-1626: cljs.test for bootstrap
+
+### Fixes
+* CLJS-1588: defrecord satisfies? behavior under bootstrap
+* CLJS-1632: docs / arglist consistency
+* CLJS-1612: Resolve ns aliases in syntax-quote
+* CLJS-1621: Foreign libs modules of different types don't compile together
+* CLJS-1617: inlined `list` evaluation order
+* :parallel-build race condition
+
 ## 1.8.40
 
 ### Fixes

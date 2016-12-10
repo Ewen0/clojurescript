@@ -7,10 +7,11 @@
 ;   You must not remove this notice, or any other, from this software.
 
 (ns cljs.test
+  #?(:cljs (:require-macros [clojure.template :as temp]))
   (:require [cljs.env :as env]
             [cljs.analyzer :as ana]
             [cljs.analyzer.api :as ana-api]
-            [clojure.template :as temp]))
+            #?(:clj [clojure.template :as temp])))
 
 ;; =============================================================================
 ;; Utilities for assertions
@@ -33,10 +34,10 @@
     `(let [values# (list ~@args)
            result# (apply ~pred values#)]
        (if result#
-         (cljs.test/do-report
+         (do-report
            {:type :pass, :message ~msg,
             :expected '~form, :actual (cons ~pred values#)})
-         (cljs.test/do-report
+         (do-report
            {:type :fail, :message ~msg,
             :expected '~form, :actual (list '~'not (cons '~pred values#))}))
        result#)))
@@ -47,10 +48,10 @@
   [msg form]
   `(let [value# ~form]
      (if value#
-       (cljs.test/do-report
+       (do-report
          {:type :pass, :message ~msg,
           :expected '~form, :actual value#})
-       (cljs.test/do-report
+       (do-report
          {:type :fail, :message ~msg,
           :expected '~form, :actual value#}))
      value#))
@@ -71,7 +72,7 @@
 
 (defmethod assert-expr :always-fail [menv msg form]
   ;; nil test: always fail
-  `(cljs.test/do-report {:type :fail, :message ~msg}))
+  `(do-report {:type :fail, :message ~msg}))
 
 (defmethod assert-expr :default [menv msg form]
   (if (and (sequential? form)
@@ -85,10 +86,10 @@
          object# ~(nth form 2)]
      (let [result# (instance? klass# object#)]
        (if result#
-         (cljs.test/do-report
+         (do-report
            {:type :pass, :message ~msg,
             :expected '~form, :actual (type object#)})
-         (cljs.test/do-report
+         (do-report
            {:type :fail, :message ~msg,
             :expected '~form, :actual (type object#)}))
        result#)))
@@ -101,11 +102,11 @@
         body (nthnext form 2)]
     `(try
        ~@body
-       (cljs.test/do-report
+       (do-report
          {:type :fail, :message ~msg,
           :expected '~form, :actual nil})
        (catch ~klass e#
-         (cljs.test/do-report
+         (do-report
            {:type :pass, :message ~msg,
             :expected '~form, :actual e#})
          e#))))
@@ -120,14 +121,14 @@
         body (nthnext form 3)]
     `(try
        ~@body
-       (cljs.test/do-report {:type :fail, :message ~msg, :expected '~form, :actual nil})
+       (do-report {:type :fail, :message ~msg, :expected '~form, :actual nil})
        (catch ~klass e#
          (let [m# (.-message e#)]
            (if (re-find ~re m#)
-             (cljs.test/do-report
+             (do-report
                {:type :pass, :message ~msg,
                 :expected '~form, :actual e#})
-             (cljs.test/do-report
+             (do-report
                {:type :fail, :message ~msg,
                 :expected '~form, :actual e#}))
            e#)))))
@@ -137,9 +138,9 @@
   You don't call this."
   [msg form]
   `(try
-     ~(cljs.test/assert-expr &env msg form)
+     ~(assert-expr &env msg form)
      (catch :default t#
-       (cljs.test/do-report 
+       (do-report
          {:type :error, :message ~msg,
           :expected '~form, :actual t#}))))
 
@@ -162,7 +163,7 @@
   re-find) the regular expression re."
   ([form] `(cljs.test/is ~form nil))
   ([form msg]
-   `(cljs.test/try-expr ~msg ~form)))
+   `(try-expr ~msg ~form)))
 
 (defmacro are
   "Checks multiple assertions with a template expression.
@@ -186,18 +187,18 @@
           (pos? (count args))
           (zero? (mod (count args) (count argv)))))
     `(clojure.template/do-template ~argv (is ~expr) ~@args)
-    (throw (IllegalArgumentException. "The number of args doesn't match are's argv."))))
+    (throw (#?(:clj Exception. :cljs js/Error.) "The number of args doesn't match are's argv."))))
 
 (defmacro testing
   "Adds a new string to the list of testing contexts.  May be nested,
   but must occur inside a test function (deftest)."
   ([string & body]
    `(do
-      (cljs.test/update-current-env! [:testing-contexts] conj ~string)
+      (update-current-env! [:testing-contexts] conj ~string)
       (try
         ~@body
         (finally
-          (cljs.test/update-current-env! [:testing-contexts] rest))))))
+          (update-current-env! [:testing-contexts] rest))))))
 
 ;; =============================================================================
 ;; Defining Tests
@@ -257,28 +258,28 @@
         env (gensym "env")
         summary (gensym "summary")]
     `(let [~env ~(if is-ns
-                   `(cljs.test/empty-env)
+                   `(empty-env)
                    env-or-ns)
            ~summary (cljs.core/volatile!
                      {:test 0 :pass 0 :fail 0 :error 0
                       :type :summary})]
        (concat ~@(map
                   (fn [ns]
-                    `(concat (cljs.test/test-ns-block ~env ~ns)
+                    `(concat (test-ns-block ~env ~ns)
                              [(fn []
                                 (cljs.core/vswap!
                                  ~summary
                                  (partial merge-with +)
                                  (:report-counters
-                                  (cljs.test/get-and-clear-env!))))]))
+                                  (get-and-clear-env!))))]))
                   (if is-ns
                     (concat [env-or-ns] namespaces)
                     namespaces))
                [(fn []
-                   (cljs.test/set-env! ~env)
+                   (set-env! ~env)
                    (do-report (deref ~summary))
                    (report (assoc (deref ~summary) :type :end-run-tests))
-                   (cljs.test/clear-env!))]))))
+                   (clear-env!))]))))
 
 (defmacro run-tests
   "Runs all tests in the given namespaces; prints results.
@@ -286,23 +287,23 @@
   value due to the possiblity of asynchronous execution. To detect test
   completion add a :end-run-tests method case to the cljs.test/report
   multimethod."
-  ([] `(run-tests (cljs.test/empty-env) '~ana/*cljs-ns*))
+  ([] `(run-tests (empty-env) '~ana/*cljs-ns*))
   ([env-or-ns]
    (if (ns? env-or-ns)
-     `(run-tests (cljs.test/empty-env) ~env-or-ns)
+     `(run-tests (empty-env) ~env-or-ns)
      `(run-tests ~env-or-ns '~ana/*cljs-ns*)))
   ([env-or-ns & namespaces]
-   `(cljs.test/run-block (run-tests-block ~env-or-ns ~@namespaces))))
+   `(run-block (run-tests-block ~env-or-ns ~@namespaces))))
 
 (defmacro run-all-tests
   "Runs all tests in all namespaces; prints results.
   Optional argument is a regular expression; only namespaces with
   names matching the regular expression (with re-matches) will be
   tested."
-  ([] `(cljs.test/run-all-tests nil (cljs.test/empty-env)))
-  ([re] `(cljs.test/run-all-tests ~re (cljs.test/empty-env)))
+  ([] `(run-all-tests nil (empty-env)))
+  ([re] `(run-all-tests ~re (empty-env)))
   ([re env]
-   `(cljs.test/run-tests ~env
+   `(run-tests ~env
       ~@(map
           (fn [ns] `(quote ~ns))
           (cond->> (ana-api/all-ns)
@@ -310,18 +311,18 @@
 
 (defmacro test-all-vars-block
   ([[quote ns]]
-   `(let [env# (cljs.test/get-current-env)]
+   `(let [env# (get-current-env)]
       (concat
        [(fn []
           (when (nil? env#)
-            (cljs.test/set-env! (cljs.test/empty-env)))
+            (set-env! (empty-env)))
           ~(when (ana-api/ns-resolve ns 'cljs-test-once-fixtures)
-             `(cljs.test/update-current-env! [:once-fixtures] assoc '~ns
+             `(update-current-env! [:once-fixtures] assoc '~ns
                                              ~(symbol (name ns) "cljs-test-once-fixtures")))
           ~(when (ana-api/ns-resolve ns 'cljs-test-each-fixtures)
-             `(cljs.test/update-current-env! [:each-fixtures] assoc '~ns
+             `(update-current-env! [:each-fixtures] assoc '~ns
                                              ~(symbol (name ns) "cljs-test-each-fixtures"))))]
-       (cljs.test/test-vars-block
+       (test-vars-block
         [~@(->> (ana-api/ns-interns ns)
                 (filter (fn [[_ v]] (:test v)))
                 (sort-by (fn [[_ v]] (:line v)))
@@ -329,13 +330,13 @@
                        `(var ~(symbol (name ns) (name k))))))])
        [(fn []
           (when (nil? env#)
-            (cljs.test/clear-env!)))]))))
+            (clear-env!)))]))))
 
 (defmacro test-all-vars
   "Calls test-vars on every var with :test metadata interned in the
   namespace, with fixtures."
   [[quote ns :as form]]
-  `(cljs.test/run-block
+  `(run-block
      (concat (test-all-vars-block ~form)
              [(fn []
                 (report {:type :end-test-all-vars :ns ~form}))])))
@@ -347,15 +348,15 @@
    (assert (and (= quote 'quote) (symbol? ns)) "Argument to test-ns must be a quoted symbol")
    (assert (ana-api/find-ns ns) (str "Namespace " ns " does not exist"))
    `[(fn []
-       (cljs.test/set-env! ~env)
-       (cljs.test/do-report {:type :begin-test-ns, :ns ~form})
+       (set-env! ~env)
+       (do-report {:type :begin-test-ns, :ns ~form})
        ;; If the namespace has a test-ns-hook function, call that:
        ~(if-let [v (ana-api/ns-resolve ns 'test-ns-hook)]
           `(~(symbol (name ns) "test-ns-hook"))
           ;; Otherwise, just test every var in the namespace.
-          `(cljs.test/block (cljs.test/test-all-vars-block ~form))))
+          `(block (test-all-vars-block ~form))))
      (fn []
-       (cljs.test/do-report {:type :end-test-ns, :ns ~form}))]))
+       (do-report {:type :end-test-ns, :ns ~form}))]))
 
 (defmacro test-ns
   "If the namespace defines a function named test-ns-hook, calls that.
@@ -364,12 +365,12 @@
 
   Internally binds *report-counters* to a ref initialized to
   *initial-report-counters*.  "
-  ([ns] `(cljs.test/test-ns (cljs.test/empty-env) ~ns))
+  ([ns] `(test-ns (empty-env) ~ns))
   ([env [quote ns :as form]]
-   `(cljs.test/run-block
-     (concat (cljs.test/test-ns-block ~env ~form)
+   `(run-block
+     (concat (test-ns-block ~env ~form)
              [(fn []
-                (cljs.test/clear-env!))]))))
+                (clear-env!))]))))
 
 ;; =============================================================================
 ;; Fixes
@@ -384,4 +385,4 @@
        [~@fns])
     :else
     (throw
-      (Exception. "First argument to cljs.test/use-fixtures must be :once or :each"))))
+      (#?(:clj Exception. :cljs js/Error.) "First argument to cljs.test/use-fixtures must be :once or :each"))))

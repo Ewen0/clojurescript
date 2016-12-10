@@ -7,9 +7,11 @@
 ;   You must not remove this notice, or any other, from this software.
 
 (ns cljs.js
+  (:refer-clojure :exclude [require])
   (:require-macros [cljs.js :refer [dump-core]]
                    [cljs.env.macros :as env])
   (:require [clojure.string :as string]
+            [clojure.walk :as walk]
             [cljs.env :as env]
             [cljs.analyzer :as ana]
             [cljs.compiler :as comp]
@@ -38,11 +40,25 @@
                    0 (- (count file) 5))]
     (symbol (demunge lib-name))))
 
+(defn- drop-macros-suffix
+  [ns-name]
+  (if (string/ends-with? ns-name "$macros")
+    (subs ns-name 0 (- (count ns-name) 7))
+    ns-name))
+
+(defn- elide-macros-suffix
+  [sym]
+  (symbol (drop-macros-suffix (namespace sym)) (name sym)))
+
 (defn- resolve-symbol
   [sym]
   (if (string/starts-with? (str sym) ".")
     sym
-    (ana/resolve-symbol sym)))
+    (elide-macros-suffix (ana/resolve-symbol sym))))
+
+(defn- read [eof rdr]
+  (binding [*ns* (symbol (drop-macros-suffix (str *ns*)))]
+    (r/read {:eof eof :read-cond :allow :features #{:cljs}} rdr)))
 
 (defn- atom? [x]
   (instance? Atom x))
@@ -70,6 +86,8 @@
 
   :lang       - the language, :clj or :js
   :source     - the source of the library (a string)
+  :file       - optional, the file path, it will be added to AST's :file keyword
+                (but not in :meta)
   :cache      - optional, if a :clj namespace has been precompiled to :js, can
                 give an analysis cache for faster loads.
   :source-map - optional, if a :clj namespace has been precompiled to :js, can
@@ -79,7 +97,7 @@
   nil."
     :dynamic true}
   *load-fn*
-  (fn [name cb]
+  (fn [m cb]
     (throw (js/Error. "No *load-fn* set"))))
 
 (defonce
@@ -95,7 +113,7 @@
   The result of evaluation should be the return value."
     :dynamic true}
   *eval-fn*
-  (fn [js-source]
+  (fn [m]
     (throw (js/Error. "No *eval-fn* set"))))
 
 (defn js-eval
@@ -155,7 +173,7 @@
      (.append sb
        (str "\n//# sourceURL=" file
             "\n//# sourceMappingURL=data:application/json;base64,"
-            (base64/encodeString json)))))
+            (base64/encodeString (string/replace json #"%([0-9A-F]{2})" (.fromCharCode js/String "0x$1")))))))
 
 (defn- current-alias-map
   []
@@ -245,9 +263,9 @@
                (assert (or (map? resource) (nil? resource))
                  "*load-fn* may only return a map or nil")
                (if resource
-                 (let [{:keys [lang source cache source-map]} resource]
+                 (let [{:keys [lang source cache source-map file]} resource]
                    (condp = lang
-                     :clj (eval-str* bound-vars source name opts
+                     :clj (eval-str* bound-vars source name (assoc opts :cljs-file file)
                             (fn [res]
                               (if (:error res)
                                 (cb res)
@@ -296,10 +314,36 @@
 
 (declare ns-side-effects analyze-deps)
 
+(defn- patch-alias-map
+  [compiler in from to]
+  (let [patch (fn [k add-if-present?]
+                (swap! compiler update-in [::ana/namespaces in k]
+                  (fn [m]
+                    (let [replaced (walk/postwalk-replace {from to} m)]
+                      (if (and add-if-present?
+                               (some #{to} (vals replaced)))
+                        (assoc replaced from to)
+                        replaced)))))
+        patch-renames (fn [k]
+                        (swap! compiler update-in [::ana/namespaces in k]
+                          (fn [m]
+                            (when m
+                              (reduce (fn [acc [renamed qualified-sym :as entry]]
+                                        (if (= (str from) (namespace qualified-sym))
+                                          (assoc acc renamed (symbol (str to) (name qualified-sym)))
+                                          (merge acc entry)))
+                                {} m)))))]
+    (patch :requires true)
+    (patch :require-macros true)
+    (patch :uses false)
+    (patch :use-macros false)
+    (patch-renames :renames)
+    (patch-renames :rename-macros)))
+
 (defn- load-deps
   ([bound-vars ana-env lib deps cb]
-   (analyze-deps bound-vars ana-env lib deps nil cb))
-  ([bound-vars ana-env lib deps opts cb]
+   (load-deps bound-vars ana-env lib deps nil nil cb))
+  ([bound-vars ana-env lib deps reload opts cb]
    (when (:verbose opts)
      (debug-prn "Loading dependencies for" lib))
    (binding [ana/*cljs-dep-set* (vary-meta (conj (:*cljs-dep-set* bound-vars) lib)
@@ -308,15 +352,30 @@
        (str "Circular dependency detected "
          (-> (:*cljs-dep-set* bound-vars) meta :dep-path)))
      (if (seq deps)
-       (let [dep (first deps)]
-         (require bound-vars dep
-           (-> opts
-             (dissoc :context)
-             (dissoc :ns))
+       (let [dep (first deps)
+             opts' (-> opts
+                     (dissoc :context)
+                     (dissoc :ns))]
+         (require bound-vars dep reload opts'
            (fn [res]
+             (when (:verbose opts)
+               (debug-prn "Loading result: " res))
              (if-not (:error res)
-               (load-deps bound-vars ana-env lib (next deps) opts cb)
-               (cb res)))))
+               (load-deps bound-vars ana-env lib (next deps) nil opts cb)
+               (if-let [cljs-dep (let [cljs-ns (ana/clj-ns->cljs-ns dep)]
+                                   (get {dep nil} cljs-ns cljs-ns))]
+                 (require bound-vars cljs-dep opts'
+                   (fn [res]
+                     (if (:error res)
+                       (cb res)
+                       (do
+                         (patch-alias-map (:*compiler* bound-vars) lib dep cljs-dep)
+                         (load-deps bound-vars ana-env lib (next deps) nil opts
+                           (fn [res]
+                             (if (:error res)
+                               (cb res)
+                               (cb (update res :aliased-loads assoc dep cljs-dep)))))))))
+                 (cb res))))))
        (cb {:value nil})))))
 
 (declare analyze-str*)
@@ -339,9 +398,9 @@
                 (assert (or (map? resource) (nil? resource))
                   "*load-fn* may only return a map or nil")
                 (if resource
-                  (let [{:keys [name lang source]} resource]
+                  (let [{:keys [name lang source file]} resource]
                     (condp = lang
-                      :clj (analyze-str* bound-vars source name opts
+                      :clj (analyze-str* bound-vars source name (assoc opts :cljs-file file)
                              (fn [res]
                                (if-not (:error res)
                                  (analyze-deps bound-vars ana-env lib (next deps) opts cb)
@@ -378,66 +437,92 @@
             (cb res)))))
     (cb {:value nil})))
 
+(defn- rewrite-ns-ast
+  [ast smap]
+  (let [rewrite-renames (fn [m]
+                          (when m
+                            (reduce (fn [acc [renamed qualified-sym :as entry]]
+                                      (let [from (symbol (namespace qualified-sym))
+                                            to   (get smap from)]
+                                        (if (some? to)
+                                          (assoc acc renamed (symbol (str to) (name qualified-sym)))
+                                          (merge acc entry))))
+                              {} m)))]
+    (-> ast
+      (update :uses #(walk/postwalk-replace smap %))
+      (update :requires #(merge smap (walk/postwalk-replace smap %)))
+      (update :renames rewrite-renames)
+      (update :rename-macros rewrite-renames))))
+
 (defn- ns-side-effects
   ([bound-vars ana-env ast opts cb]
     (ns-side-effects false bound-vars ana-env ast opts cb))
   ([load bound-vars ana-env {:keys [op] :as ast} opts cb]
    (when (:verbose opts)
      (debug-prn "Namespace side effects for" (:name ast)))
-   (if (= :ns op)
-     (let [{:keys [deps uses requires require-macros use-macros reload reloads]} ast
-           env (:*compiler* bound-vars)]
-       (letfn [(check-uses-and-load-macros [res]
+   (if (#{:ns :ns*} op)
+     (letfn [(check-uses-and-load-macros [res rewritten-ast]
+               (let [env (:*compiler* bound-vars)
+                     {:keys [uses requires require-macros use-macros reload reloads]} rewritten-ast]
                  (if (:error res)
                    (cb res)
-                   (let [res (try
-                               (when (and (:*analyze-deps* bound-vars) (seq uses))
-                                 (when (:verbose opts) (debug-prn "Checking uses"))
-                                 (ana/check-uses uses env)
-                                 {:value nil})
-                               (catch :default cause
-                                 (wrap-error
-                                   (ana/error ana-env
-                                     (str "Could not parse ns form " (:name ast)) cause))))]
-                     (if (:error res)
-                       (cb res)
-                       (if (:*load-macros* bound-vars)
-                         (do
-                           (when (:verbose opts) (debug-prn "Processing :use-macros for" (:name ast)))
-                           (load-macros bound-vars :use-macros use-macros reload reloads opts
-                             (fn [res]
-                               (if (:error res)
-                                 (cb res)
-                                 (do
-                                   (when (:verbose opts) (debug-prn "Processing :require-macros for" (:name ast)))
-                                   (load-macros bound-vars :require-macros require-macros reloads reloads opts
-                                     (fn [res]
+                   (if (:*load-macros* bound-vars)
+                     (do
+                       (when (:verbose opts) (debug-prn "Processing :use-macros for" (:name ast)))
+                       (load-macros bound-vars :use-macros use-macros reload reloads opts
+                         (fn [res]
+                           (if (:error res)
+                             (cb res)
+                             (do
+                               (when (:verbose opts) (debug-prn "Processing :require-macros for" (:name ast)))
+                               (load-macros bound-vars :require-macros require-macros reloads reloads opts
+                                 (fn [res]
+                                   (if (:error res)
+                                     (cb res)
+                                     (let [res (try
+                                                 (when (seq use-macros)
+                                                   (when (:verbose opts) (debug-prn "Checking :use-macros for" (:name ast)))
+                                                   (ana/check-use-macros use-macros env))
+                                                 {:value nil}
+                                                 (catch :default cause
+                                                   (wrap-error
+                                                     (ana/error ana-env
+                                                       (str "Could not parse ns form " (:name ast)) cause))))]
                                        (if (:error res)
                                          (cb res)
-                                         (let [res (try
-                                                     (when (seq use-macros)
-                                                       (when (:verbose opts) (debug-prn "Checking :use-macros for" (:name ast)))
-                                                       (ana/check-use-macros use-macros env))
-                                                     {:value nil}
-                                                     (catch :default cause
-                                                       (wrap-error
-                                                         (ana/error ana-env
-                                                           (str "Could not parse ns form " (:name ast)) cause))))]
-                                           (if (:error res)
-                                             (cb res)
-                                             (cb {:value ast})))))))))))
-                        (cb {:value ast}))))))]
-         (cond
-           (and load (seq deps))
-           (load-deps bound-vars ana-env (:name ast) deps (dissoc opts :macros-ns)
-             check-uses-and-load-macros)
+                                         (try
+                                           (binding [ana/*analyze-deps* (:*analyze-deps* bound-vars)]
+                                             (let [ast' (-> rewritten-ast
+                                                          (ana/check-use-macros-inferring-missing env)
+                                                          (ana/check-rename-macros-inferring-missing env))]
+                                               (cb {:value ast'})))
+                                           (catch :default cause
+                                             (cb (wrap-error
+                                                   (ana/error ana-env
+                                                     (str "Could not parse ns form " (:name ast)) cause)))))))))))))))
+                     (try
+                       (when (:verbose opts) (debug-prn "Checking uses"))
+                       (ana/check-uses
+                         (when (and (:*analyze-deps* bound-vars) (seq uses))
+                           (ana/missing-uses uses env))
+                         env)
+                       (cb {:value ast})
+                       (catch :default cause
+                         (cb (wrap-error
+                               (ana/error ana-env
+                                 (str "Could not parse ns form " (:name ast)) cause)))))))))]
+       (cond
+         (and load (seq (:deps ast)))
+         (let [{:keys [reload name deps]} ast]
+           (load-deps bound-vars ana-env name deps (or (:require reload) (:use reload)) (dissoc opts :macros-ns)
+             #(check-uses-and-load-macros % (rewrite-ns-ast ast (:aliased-loads %)))))
 
-           (and (not load) (:*analyze-deps* bound-vars) (seq deps))
-           (analyze-deps bound-vars ana-env (:name ast) deps (dissoc opts :macros-ns)
-             check-uses-and-load-macros)
+         (and (not load) (:*analyze-deps* bound-vars) (seq (:deps ast)))
+         (analyze-deps bound-vars ana-env (:name ast) (:deps ast) (dissoc opts :macros-ns)
+           #(check-uses-and-load-macros % ast))
 
-           :else
-           (check-uses-and-load-macros {:value nil}))))
+         :else
+         (check-uses-and-load-macros {:value nil} ast)))
      (cb {:value ast}))))
 
 (defn- analyze-str* [bound-vars source name opts cb]
@@ -456,9 +541,10 @@
                  r/*alias-map*          (current-alias-map)
                  r/*data-readers*       (:*data-readers* bound-vars)
                  r/resolve-symbol       resolve-symbol
-                 comp/*source-map-data* (:*sm-data* bound-vars)]
+                 comp/*source-map-data* (:*sm-data* bound-vars)
+                 ana/*cljs-file*        (:cljs-file opts)]
          (let [res (try
-                     {:value (r/read {:eof eof :read-cond :allow :features #{:cljs}} rdr)}
+                     {:value (read eof rdr)}
                      (catch :default cause
                        (wrap-error
                          (ana/error aenv
@@ -479,7 +565,7 @@
                    (if (:error res)
                      (cb res)
                      (let [ast (:value res)]
-                       (if (= :ns (:op ast))
+                       (if (#{:ns :ns*} (:op ast))
                          (ns-side-effects bound-vars aenv ast opts
                            (fn [res]
                              (if (:error res)
@@ -504,8 +590,21 @@
    opts (map)
      compilation options.
 
-   :eval - the eval function to invoke, see *eval-fn*
-   :load - library resolution function, see *load-fn*
+      :eval          - eval function to invoke, see *eval-fn*
+      :load          - library resolution function, see *load-fn*
+      :source-map    - set to true to generate inline source map information
+      :def-emits-var - sets whether def (and derived) forms return either a Var
+                       (if set to true) or the def init value (if false). Default
+                       is false.
+      :static-fns    - employ static dispatch to specific function arities in
+                       emitted JavaScript, as opposed to making use of the
+                       `call` construct. Default is false.
+      :ns            - optional, the namespace in which to evaluate the source.
+      :verbose       - optional, emit details from compiler activity. Defaults to
+                       false.
+      :context       - optional, sets the context for the source. Possible values
+                       are `:expr`, `:statement` and `:return`. Defaults to
+                       `:expr`.
 
    cb (function)
      callback, will be invoked with a map. If successful the map will contain
@@ -558,7 +657,7 @@
         (if (:error res)
           (cb res)
           (let [ast (:value res)]
-            (if (= :ns (:op ast))
+            (if (#{:ns :ns*} (:op ast))
               (ns-side-effects true bound-vars aenv ast opts
                 (fn [res]
                   (if (:error res)
@@ -580,8 +679,21 @@
    opts (map)
      compilation options.
 
-     :eval - the eval function to invoke, see *eval-fn*
-     :load - library resolution function, see *load-fn*
+      :eval          - eval function to invoke, see *eval-fn*
+      :load          - library resolution function, see *load-fn*
+      :source-map    - set to true to generate inline source map information
+      :def-emits-var - sets whether def (and derived) forms return either a Var
+                       (if set to true) or the def init value (if false). Default
+                       is false.
+      :static-fns    - employ static dispatch to specific function arities in
+                       emitted JavaScript, as opposed to making use of the
+                       `call` construct. Default is false.
+      :ns            - optional, the namespace in which to evaluate the source.
+      :verbose       - optional, emit details from compiler activity. Defaults to
+                       false.
+      :context       - optional, sets the context for the source. Possible values
+                       are `:expr`, `:statement` and `:return`. Defaults to
+                       `:expr`.
 
    cb (function)
      callback, will be invoked with a map. If successful the map will contain
@@ -622,7 +734,7 @@
                  r/resolve-symbol       resolve-symbol
                  comp/*source-map-data* (:*sm-data* bound-vars)]
          (let [res (try
-                     {:value (r/read {:eof eof :read-cond :allow :features #{:cljs}} rdr)}
+                     {:value (read eof rdr)}
                      (catch :default cause
                        (wrap-error
                          (ana/error aenv
@@ -644,7 +756,7 @@
                      (cb res)
                      (let [ast (:value res)]
                        (.append sb (with-out-str (comp/emit ast)))
-                       (if (= :ns (:op ast))
+                       (if (#{:ns :ns*} (:op ast))
                          (ns-side-effects bound-vars aenv ast opts
                            (fn [res]
                              (if (:error res)
@@ -672,8 +784,21 @@
    opts (map)
      compilation options.
 
-     :load       - library resolution function, see *load-fn*
-     :source-map - set to true to generate inline source map information
+      :eval          - eval function to invoke, see *eval-fn*
+      :load          - library resolution function, see *load-fn*
+      :source-map    - set to true to generate inline source map information
+      :def-emits-var - sets whether def (and derived) forms return either a Var
+                       (if set to true) or the def init value (if false). Default
+                       is false.
+      :static-fns    - employ static dispatch to specific function arities in
+                       emitted JavaScript, as opposed to making use of the
+                       `call` construct. Default is false.
+      :ns            - optional, the namespace in which to evaluate the source.
+      :verbose       - optional, emit details from compiler activity. Defaults to
+                       false.
+      :context       - optional, sets the context for the source. Possible values
+                       are `:expr`, `:statement` and `:return`. Defaults to
+                       `:expr`.
 
    cb (function)
      callback, will be invoked with a map. If successful the map will contain
@@ -719,9 +844,10 @@
                  r/*alias-map*          (current-alias-map)
                  r/*data-readers*       (:*data-readers* bound-vars)
                  r/resolve-symbol       resolve-symbol
-                 comp/*source-map-data* (:*sm-data* bound-vars)]
+                 comp/*source-map-data* (:*sm-data* bound-vars)
+                 ana/*cljs-file*        (:cljs-file opts)]
          (let [res (try
-                     {:value (r/read {:eof eof :read-cond :allow :features #{:cljs}} rdr)}
+                     {:value (read eof rdr)}
                      (catch :default cause
                        (wrap-error
                          (ana/error aenv
@@ -743,7 +869,7 @@
                      (cb res)
                      (let [ast (:value res)
                            ns' ana/*cljs-ns*]
-                      (if (= :ns (:op ast))
+                      (if (#{:ns :ns*} (:op ast))
                         (do
                           (.append sb
                             (with-out-str (comp/emitln (str "goog.provide(\"" (munge (:name ast)) "\");"))))
@@ -796,15 +922,27 @@
   opts (map)
     compilation options.
 
-    :eval         - eval function to invoke, see *eval-fn*
-    :load         - library resolution function, see *load-fn*
-    :source-map   - set to true to generate inline source map information
-    :cache-source - optional, a function to run side-effects with the
-                    compilation result prior to actual evalution. This function
-                    takes two arguments, the first is the eval map, the source
-                    will be under :source. The second argument is a callback of
-                    one argument. If an error occurs an :error key should be
-                    supplied.
+    :eval          - eval function to invoke, see *eval-fn*
+    :load          - library resolution function, see *load-fn*
+    :source-map    - set to true to generate inline source map information
+    :cache-source  - optional, a function to run side-effects with the
+                     compilation result prior to actual evalution. This function
+                     takes two arguments, the first is the eval map, the source
+                     will be under :source. The second argument is a callback of
+                     one argument. If an error occurs an :error key should be
+                     supplied.
+    :def-emits-var - sets whether def (and derived) forms return either a Var
+                     (if set to true) or the def init value (if false). Default
+                     is false.
+    :static-fns    - employ static dispatch to specific function arities in
+                     emitted JavaScript, as opposed to making use of the
+                     `call` construct. Default is false.
+    :ns            - optional, the namespace in which to evaluate the source.
+    :verbose       - optional, emit details from compiler activity. Defaults to
+                     false.
+    :context       - optional, sets the context for the source. Possible values
+                     are `:expr`, `:statement` and `:return`. Defaults to
+                      `:expr`.
 
   cb (function)
     callback, will be invoked with a map. If succesful the map will contain
