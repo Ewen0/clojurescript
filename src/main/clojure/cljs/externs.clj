@@ -19,26 +19,30 @@
 ;; Externs Parsing
 
 (defn annotate [props ty]
-  (conj
-    (into [] (butlast props))
-    (vary-meta (last props) assoc :tag ty)))
+  (when (seq props)
+    (conj
+      (into [] (butlast props))
+      (with-meta (last props) ty))))
+
+(defn get-type* [^JSTypeExpression texpr]
+  (when-let [root (.getRoot texpr)]
+    (if (.isString root)
+      (symbol (.getString root))
+      (if-let [child (.. root getFirstChild)]
+        (if (.isString child)
+          (symbol (.. child getString)))))))
 
 (defn get-type [^Node node]
   (when node
     (let [info (.getJSDocInfo node)]
       (when info
         (if-let [^JSTypeExpression ty (.getType info)]
-          (when-let [root (.getRoot ty)]
-            (if (.isString root)
-              (symbol (.getString root))
-              (if-let [child (.. root getFirstChild)]
-                (if (.isString child)
-                  (symbol (.. child getString))))))
+          {:tag (get-type* ty)}
           (if (or (.isConstructor info) (.isInterface info))
-            (symbol (.. node getFirstChild getQualifiedName))
+            {:tag (symbol (.. node getFirstChild getQualifiedName))}
             (if (.hasReturnType info)
-              nil
-              nil)))))))
+              {:tag 'Function
+               :ret-tag (get-type* (.getReturnType info))})))))))
 
 (defmulti parse-extern-node
   (fn [^Node node]
@@ -123,19 +127,40 @@
         (seq xs) (update-in xs merge {})))
     {} externs))
 
-(defn default-externs []
-  (let [xs (CommandLineRunner/getDefaultExterns)]
-    (reduce
-      (fn [externs externs-file]
-        (util/map-merge
-          externs (index-externs (parse-externs externs-file))))
-      {} xs)))
+(defn default-externs
+  ([]
+    (default-externs
+      '{eval {}
+        global {}
+        goog {nodeGlobalRequire {}}
+        COMPILED {}
+        TypeError {}
+        Error {prototype {number {} columnNumber {}}}
+        ReferenceError {}}))
+  ([defaults]
+   (let [xs (CommandLineRunner/getDefaultExterns)]
+     (reduce
+       (fn [externs externs-file]
+         (util/map-merge
+           externs (index-externs (parse-externs externs-file))))
+       defaults xs))))
 
 (comment
   (default-externs)
 
   (-> (default-externs)
     (find 'console) first meta)
+
+  (get (default-externs) 'Function)
+
+  (get (default-externs) 'Error)
+
+  ;; values are not on the prototype
+  (get (default-externs) 'Symbol)
+  (get (default-externs) 'Number)
+
+  (-> (get-in (default-externs) '[Window prototype])
+    (find 'performance) first meta)
 
   ;; webkit_dom.js defines Console and Window.prototype.console
   (filter
@@ -151,6 +176,15 @@
       (CommandLineRunner/getDefaultExterns))
     first parse-externs index-externs
     (find 'console) first meta)
+
+  (->
+    (filter
+      (fn [s]
+        (= "externs.zip//webkit_dom.js" (.getName s)))
+      (CommandLineRunner/getDefaultExterns))
+    first parse-externs index-externs
+    (get-in '[Console prototype])
+    (find 'log) first meta)
 
   (require '[clojure.java.io :as io]
            '[cljs.closure :as cc])

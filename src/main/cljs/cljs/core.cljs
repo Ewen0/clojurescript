@@ -109,6 +109,14 @@
 
 (def
   ^{:dynamic true
+    :doc "*print-namespace-maps* controls whether the printer will print
+  namespace map literal syntax.
+
+  Defaults to false, but the REPL binds it to true."}
+  *print-namespace-maps* false)
+
+(def
+  ^{:dynamic true
     :doc "*print-length* controls how many items of each collection the
   printer will print. If it is bound to logical false, there is no
   limit. Otherwise, it must be bound to an integer indicating the maximum
@@ -1516,11 +1524,12 @@ reduces them without incurring seq initialization"
   IIndexed
   (-nth [coll n]
     (let [i (+ n i)]
-      (when (< i (alength arr))
-        (aget arr i))))
+      (if (and (<= 0 i) (< i (alength arr)))
+        (aget arr i)
+        (throw (js/Error. "Index out of bounds")))))
   (-nth [coll n not-found]
     (let [i (+ n i)]
-      (if (< i (alength arr))
+      (if (and (<= 0 i) (< i (alength arr)))
         (aget arr i)
         not-found)))
 
@@ -6357,6 +6366,35 @@ reduces them without incurring seq initialization"
       (let [cnt (/ (alength arr) 2)]
         (PersistentArrayMap. nil cnt arr nil)))))
 
+(set! (.-createWithCheck PersistentArrayMap)
+  (fn [arr]
+    (let [ret (array)]
+      (loop [i 0]
+        (when (< i (alength arr))
+          (let [k (aget arr i)
+                v (aget arr (inc i))
+                idx (array-index-of ret k)]
+            (if (== idx -1)
+              (doto ret (.push k) (.push v))
+              (throw (js/Error. (str "Duplicate key: " k)))))
+          (recur (+ i 2))))
+      (let [cnt (/ (alength arr) 2)]
+        (PersistentArrayMap. nil cnt arr nil)))))
+
+(set! (.-createAsIfByAssoc PersistentArrayMap)
+  (fn [arr]
+    (let [ret (array)]
+      (loop [i 0]
+        (when (< i (alength arr))
+          (let [k (aget arr i)
+                v (aget arr (inc i))
+                idx (array-index-of ret k)]
+            (if (== idx -1)
+              (doto ret (.push k) (.push v))
+              (aset ret (inc idx) v)))
+          (recur (+ i 2))))
+      (PersistentArrayMap. nil (/ (alength ret) 2) ret nil))))
+
 (es6-iterable PersistentArrayMap)
 
 (declare array->transient-hash-map)
@@ -7309,6 +7347,18 @@ reduces them without incurring seq initialization"
           (recur (inc i) (-assoc! out (aget ks i) (aget vs i)))
           (persistent! out))))))
 
+(set! (.-createWithCheck PersistentHashMap)
+  (fn [arr]
+    (let [len (alength arr)
+          ret (transient (.-EMPTY PersistentHashMap))]
+      (loop [i 0]
+        (when (< i len)
+          (-assoc! ret (aget arr i) (aget arr (inc i)))
+          (if (not= (-count ret) (inc (/ i 2)))
+            (throw (js/Error. (str "Duplicate key: " (aget arr i))))
+            (recur (+ i 2)))))
+      (-persistent! ret))))
+
 (es6-iterable PersistentHashMap)
 
 (deftype TransientHashMap [^:mutable ^boolean edit
@@ -8128,7 +8178,7 @@ reduces them without incurring seq initialization"
   (let [arr (if (and (instance? IndexedSeq keyvals) (zero? (.-i keyvals)))
               (.-arr keyvals)
               (into-array keyvals))]
-    (.fromArray cljs.core/PersistentArrayMap arr true false)))
+    (.createAsIfByAssoc PersistentArrayMap arr true false)))
 
 (defn obj-map
   "keyval => key val
@@ -8463,6 +8513,23 @@ reduces them without incurring seq initialization"
            (recur (inc i) (-conj! out (aget items i)))
            (-persistent! out)))))))
 
+(set! (.-createWithCheck PersistentHashSet)
+      (fn [items]
+        (let [len (alength items)
+              t (-as-transient (.-EMPTY PersistentHashSet))]
+          (dotimes [i len]
+            (-conj! t (aget items i))
+            (when-not (= (count t) (inc i))
+              (throw (js/Error. (str "Duplicate key: " (aget items i))))))
+          (-persistent! t))))
+
+(set! (.-createAsIfByAssoc PersistentHashSet)
+      (fn [items]
+        (let [len (alength items)
+              t (-as-transient (.-EMPTY PersistentHashSet))]
+          (dotimes [i len] (-conj! t (aget items i)))
+          (-persistent! t))))
+
 (es6-iterable PersistentHashSet)
 
 (deftype TransientHashSet [^:mutable transient-map]
@@ -8609,7 +8676,7 @@ reduces them without incurring seq initialization"
       (nil? in) #{}
 
       (and (instance? IndexedSeq in) (zero? (.-i in)))
-      (set-from-indexed-seq in)
+      (.createAsIfByAssoc PersistentHashSet (.-arr in))
 
       :else
       (loop [^not-native in in
@@ -9378,15 +9445,43 @@ reduces them without incurring seq initialization"
   (when *print-newline*
     (newline (pr-opts))))
 
-(defn print-map [m print-one writer opts]
+(defn- strip-ns
+  [named]
+  (if (symbol? named)
+    (symbol nil (name named))
+    (keyword nil (name named))))
+
+(defn- lift-ns
+  "Returns [lifted-ns lifted-map] or nil if m can't be lifted."
+  [m]
+  (when *print-namespace-maps*
+    (loop [ns nil
+           [[k v :as entry] & entries] (seq m)
+           lm (empty m)]
+      (if entry
+        (when (or (keyword? k) (symbol? k))
+          (if ns
+            (when (= ns (namespace k))
+              (recur ns entries (assoc lm (strip-ns k) v)))
+            (when-let [new-ns (namespace k)]
+              (recur new-ns entries (assoc lm (strip-ns k) v)))))
+        [ns lm]))))
+
+(defn print-prefix-map [prefix m print-one writer opts]
   (pr-sequential-writer
     writer
     (fn [e w opts]
       (do (print-one (key e) w opts)
           (-write w \space)
           (print-one (val e) w opts)))
-    "{" ", " "}"
+    (str prefix "{") ", " "}"
     opts (seq m)))
+
+(defn print-map [m print-one writer opts]
+  (let [[ns lift-map] (lift-ns m)]
+    (if ns
+      (print-prefix-map (str "#:" ns) lift-map print-one writer opts)
+      (print-prefix-map nil m print-one writer opts))))
 
 (extend-protocol IPrintWithWriter
   LazySeq

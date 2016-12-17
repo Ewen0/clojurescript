@@ -217,7 +217,7 @@
 (deftest method-inference
   (is (= (e/with-compiler-env test-cenv
            (:tag (a/analyze test-env '(.foo js/bar))))
-         'any)))
+         'js)))
 
 (deftest fn-inference
   ;(is (= (e/with-compiler-env test-cenv
@@ -487,7 +487,17 @@
   (is (= (a/canonicalize-specs '(:exclude (quote [map mapv])))
          '(:exclude [map mapv])))
   (is (= (a/canonicalize-specs '(:require (quote [clojure.set :as set])))
-         '(:require [clojure.set :as set]))))
+         '(:require [clojure.set :as set])))
+  (is (= (a/canonicalize-specs '(:require (quote clojure.set)))
+         '(:require [clojure.set]))))
+
+(deftest test-canonicalize-import-specs
+  (is (= (a/canonicalize-import-specs '(:import (quote [goog Uri])))
+         '(:import [goog Uri])))
+  (is (= (a/canonicalize-import-specs '(:import (quote (goog Uri))))
+         '(:import (goog Uri))))
+  (is (= (a/canonicalize-import-specs '(:import (quote goog.Uri)))
+         '(:import goog.Uri))))
 
 (deftest test-cljs-1346
   (testing "`ns*` special form conformance"
@@ -552,7 +562,10 @@
               a/*cljs-warnings* nil]
       (is (thrown-with-msg? Exception #"Arguments to require must be quoted"
             (a/analyze test-env
-              '(require [clojure.set :as set]))))))
+              '(require [clojure.set :as set]))))
+      (is (thrown-with-msg? Exception #"Arguments to require must be quoted"
+            (a/analyze test-env
+              '(require clojure.set))))))
   (testing "`:ns` and `:ns*` should throw if not `:top-level`"
     (binding [a/*cljs-ns* a/*cljs-ns*
               a/*cljs-warnings* nil]
@@ -620,7 +633,9 @@
             (def c js/React.Component)
             (js/console.log "Hello world!")
             (fn [& args]
-              (.apply (.-log js/console) js/console (into-array args)))]))
+              (.apply (.-log js/console) js/console (into-array args)))
+            (js/console.log js/Number.MAX_VALUE)
+            (js/console.log js/Symbol.iterator)]))
       (cc/emit-externs
         (reduce util/map-merge {}
           (map (comp :externs second)

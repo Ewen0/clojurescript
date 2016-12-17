@@ -769,21 +769,42 @@
                  'prototype)})
     x))
 
+(def alias->type
+  '{object   Object
+    string   String
+    number   Number
+    array    Array
+    function Function
+    boolean  Boolean
+    symbol   Symbol})
+
 (defn has-extern?*
   ([pre externs]
-   (has-extern?* pre externs externs))
-  ([pre externs top]
+   (let [pre (if-let [me (find
+                           (get-in externs '[Window prototype])
+                           (first pre))]
+               (if-let [tag (-> me first meta :tag)]
+                 (into [tag 'prototype] (next pre))
+                 pre)
+               pre)]
+     (has-extern?* pre externs externs #{})))
+  ([pre externs top seen]
    (if (empty? pre)
      true
      (let [x  (first pre)
            me (find externs x)]
-       (if-not me
-         false
-         (let [[x' externs'] me]
+       (cond
+         (seen x) true
+         (not me) false
+         :else
+         (let [seen' (conj seen x)
+               [x' externs'] me]
            (if-let [tag (-> x' meta :tag)]
-             (let [pre' (into [] (map symbol) (string/split (str tag) #"\."))]
-               (has-extern?* (into (conj pre' 'prototype) (next pre)) top top))
-             (recur (next pre) externs' top))))))))
+             (let [pre' (into [] (map symbol)
+                          (string/split (str (alias->type tag tag)) #"\."))]
+               (or (has-extern?* (into pre' (next pre)) top top seen')
+                   (has-extern?* (into (conj pre' 'prototype) (next pre)) top top seen')))
+             (recur (next pre) externs' top seen'))))))))
 
 (defn has-extern?
   ([pre]
@@ -2194,6 +2215,13 @@
                 (if (vector? spec) spec [spec]))))]
     (map canonicalize specs)))
 
+(defn canonicalize-import-specs [specs]
+  (letfn [(canonicalize [quoted-spec-or-kw]
+            (if (keyword? quoted-spec-or-kw)
+              quoted-spec-or-kw
+              (second quoted-spec-or-kw)))]
+    (map canonicalize specs)))
+
 (defn desugar-ns-specs
   "Given an original set of ns specs desugar :include-macros and :refer-macros
    usage into only primitive spec forms - :use, :require, :use-macros,
@@ -2374,14 +2402,16 @@
 (defmethod parse 'ns*
   [_ env [_ quoted-specs :as form] _ opts]
   (when-let [not-quoted (->> (remove keyword? quoted-specs)
-                          (filter #(not= 'quote (first %)) )
+                          (remove #(and (seq? %) (= 'quote (first %))) )
                           first)]
     (throw (error env (str "Arguments to " (name (first quoted-specs))
                         " must be quoted. Offending spec: " not-quoted))))
   (when-not *allow-ns*
     (throw (error env (str "Calls to `" (name (first quoted-specs))
                         "` must appear at the top-level."))))
-  (let [specs        (canonicalize-specs quoted-specs)
+  (let [specs        (if (= :import (first quoted-specs))
+                       (canonicalize-import-specs quoted-specs)
+                       (canonicalize-specs quoted-specs))
         name         (-> env :ns :name)
         args         (desugar-ns-specs
                        #?(:clj  (list (process-rewrite-form
