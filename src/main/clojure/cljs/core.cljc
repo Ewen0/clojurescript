@@ -784,7 +784,7 @@
   (zipmap (map #(symbol "cljs.core" (core/str %))
                '[IFn ICounted IEmptyableCollection ICollection IIndexed ASeq ISeq INext
                  ILookup IAssociative IMap IMapEntry ISet IStack IVector IDeref
-                 IDerefWithTimeout IMeta IWithMeta IReduce IKVReduce IEquiv IHash
+                 IDerefWithTimeout IReduce IKVReduce IEquiv IHash
                  ISeqable ISequential IList IRecord IReversible ISorted IPrintWithWriter IWriter
                  IPrintWithWriter IPending IWatchable IEditableCollection ITransientCollection
                  ITransientAssociative ITransientMap ITransientVector ITransientSet
@@ -1296,13 +1296,7 @@
              munge    comp/munge]
     `(do
        (when-not (exists? ~(symbol (core/str ns) (core/str t)))
-         (deftype ~t [~@locals ~meta-sym]
-           IWithMeta
-           (~'-with-meta [~this-sym ~meta-sym]
-             (new ~t ~@locals ~meta-sym))
-           IMeta
-           (~'-meta [~this-sym] ~meta-sym)
-           ~@impls))
+         (deftype ~t [~@locals ~meta-sym] ~@impls))
        (new ~t ~@locals ~(ana/elide-reader-meta (meta &form))))))
 
 (core/defmacro specify!
@@ -1748,10 +1742,6 @@
                                  (equiv-map this# other#))
                              true
                              false))
-                        'IMeta
-                        `(~'-meta [this#] ~'__meta)
-                        'IWithMeta
-                        `(~'-with-meta [this# ~gs] (new ~tagname ~@(replace {'__meta gs} fields)))
                         'ILookup
                         `(~'-lookup [this# k#] (-lookup this# k# nil))
                         `(~'-lookup [this# ~ksym else#]
@@ -2066,7 +2056,7 @@
   is called, and will cache the result and return it on all subsequent
   seq calls."
   [& body]
-  `(new cljs.core/LazySeq nil (fn [] ~@body) nil nil))
+  `(new cljs.core/LazySeq (fn [] ~@body) nil nil))
 
 (core/defmacro delay
   "Takes a body of expressions and yields a Delay object that will
@@ -2443,7 +2433,7 @@
   ([& xs]
    (core/let [cnt (count xs)]
      (if (core/< cnt 32)
-       `(cljs.core/PersistentVector. nil ~cnt 5
+       `(cljs.core/PersistentVector. ~cnt 5
           (.-EMPTY-NODE cljs.core/PersistentVector) (array ~@xs) nil)
        (vary-meta
          `(.fromArray cljs.core/PersistentVector (array ~@xs) true)
@@ -2456,7 +2446,7 @@
      (if (core/and (every? #(= (:op %) :constant)
                      (map #(cljs.analyzer/analyze &env %) keys))
            (= (count (into #{} keys)) (count keys)))
-       `(cljs.core/PersistentArrayMap. nil ~(clojure.core// (count kvs) 2) (array ~@kvs) nil)
+       `(cljs.core/PersistentArrayMap. ~(clojure.core// (count kvs) 2) (array ~@kvs) nil)
        `(.createAsIfByAssoc cljs.core/PersistentArrayMap (array ~@kvs))))))
 
 (core/defmacro hash-map
@@ -2477,7 +2467,7 @@
                     (map #(cljs.analyzer/analyze &env %) xs))
                   (= (count (into #{} xs)) (count xs)))
       `(cljs.core/PersistentHashSet. nil
-         (cljs.core/PersistentArrayMap. nil ~(count xs) (array ~@(interleave xs (repeat nil))) nil)
+         (cljs.core/PersistentArrayMap. ~(count xs) (array ~@(interleave xs (repeat nil))) nil)
          nil)
       (vary-meta
         `(.createAsIfByAssoc cljs.core/PersistentHashSet (array ~@xs))
@@ -2931,7 +2921,7 @@
                (copy-arguments args#)
                (let [argseq# (when (< ~c-1 (alength args#))
                                (new ^::ana/no-resolve cljs.core/IndexedSeq
-                                 (.slice args# ~c-1) 0 nil))]
+                                 (.slice args# ~c-1) 0))]
                  (. ~rname
                    (~'cljs$core$IFn$_invoke$arity$variadic ~@(dest-args c-1) argseq#))))))
          ~(variadic-fn* rname method)
@@ -2989,7 +2979,7 @@
                 ~@(mapcat #(fixed-arity rname %) sigs)
                 ~(if variadic
                    `(let [argseq# (new ^::ana/no-resolve cljs.core/IndexedSeq
-                                    (.slice ~args-sym ~maxfa) 0 nil)]
+                                    (.slice ~args-sym ~maxfa) 0)]
                       (. ~rname
                         (~'cljs$core$IFn$_invoke$arity$variadic
                           ~@(dest-args maxfa)

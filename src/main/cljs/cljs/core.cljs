@@ -93,14 +93,6 @@
 
 (def
   ^{:dynamic true
-    :doc "If set to logical true, when printing an object, its metadata will also
-  be printed in a form that can be read back by the reader.
-
-  Defaults to false."}
-  *print-meta* false)
-
-(def
-  ^{:dynamic true
     :doc "When set to logical true, objects will be printed in a way that preserves
   their type when read in later.
 
@@ -148,7 +140,6 @@
 (defn- pr-opts []
   {:flush-on-newline *flush-on-newline*
    :readably *print-readably*
-   :meta *print-meta*
    :dup *print-dup*
    :print-length *print-length*})
 
@@ -587,16 +578,6 @@
 (defprotocol IDerefWithTimeout
   (-deref-with-timeout [o msec timeout-val]))
 
-(defprotocol IMeta
-  "Protocol for accessing the metadata of an object."
-  (^clj-or-nil -meta [o]
-    "Returns the metadata of object o."))
-
-(defprotocol IWithMeta
-  "Protocol for adding metadata to an object."
-  (^clj -with-meta [o meta]
-    "Returns a new object with value of o and metadata meta added to it."))
-
 (defprotocol IReduce
   "Protocol for seq types that can reduce themselves.
   Called by cljs.core/reduce."
@@ -756,16 +737,6 @@
 
 (defprotocol IAtom
   "Marker protocol indicating an atom.")
-
-(defprotocol IReset
-  "Protocol for adding resetting functionality."
-  (-reset! [o new-value]
-    "Sets the value of o to new-value."))
-
-(defprotocol ISwap
-  "Protocol for adding swapping functionality."
-  (-swap! [o f] [o f a] [o f a b] [o f a b xs]
-    "Swaps the value of o to be (apply f current-value-of-atom args)."))
 
 (defprotocol IVolatile
   "Protocol for adding volatile functionality."
@@ -968,9 +939,8 @@
 
 (declare get)
 
-(deftype Symbol [ns name str ^:mutable _hash _meta]
+(deftype Symbol [ns name str ^:mutable _hash]
   Object
-  (toString [_] str)
   (equiv [this other] (-equiv this other))
 
   IEquiv
@@ -984,12 +954,6 @@
     (get coll sym))
   (-invoke [sym coll not-found]
     (get coll sym not-found))
-
-  IMeta
-  (-meta [_] _meta)
-
-  IWithMeta
-  (-with-meta [_ new-meta] (Symbol. ns name str _hash new-meta))
 
   IHash
   (-hash [sym]
@@ -1016,21 +980,15 @@
    (let [sym-str (if-not (nil? ns)
                    (str ns "/" name)
                    name)]
-     (Symbol. ns name sym-str nil nil))))
+     (Symbol. ns name sym-str nil))))
 
-(deftype Var [val sym _meta]
+(deftype Var [val sym]
   Object
   (isMacro [_]
     (. (val) -cljs$lang$macro))
-  (toString [_]
-    (str "#'" sym))
   IDeref
   (-deref [_] (val))
-  IMeta
-  (-meta [_] _meta)
-  IWithMeta
-  (-with-meta [_ new-meta]
-    (Var. val sym new-meta))
+  
   IEquiv
   (-equiv [this other]
     (if (instance? Var other)
@@ -1122,11 +1080,11 @@
 
       (array? coll)
       (when-not (zero? (alength coll))
-        (IndexedSeq. coll 0 nil))
+        (IndexedSeq. coll 0))
 
       (string? coll)
       (when-not (zero? (alength coll))
-        (IndexedSeq. coll 0 nil))
+        (IndexedSeq. coll 0))
 
       (native-satisfies? ISeqable coll)
       (-seq coll)
@@ -1306,12 +1264,8 @@
   IEquiv
   (-equiv [x o] (identical? x o)))
 
-(declare with-meta)
-
 (extend-type function
-  Fn
-  IMeta
-  (-meta [_] nil))
+  Fn)
 
 (extend-type default
   IHash
@@ -1476,10 +1430,8 @@ reduces them without incurring seq initialization"
       (set! i (inc i))
       ret)))
 
-(deftype IndexedSeq [arr i meta]
+(deftype IndexedSeq [arr i]
   Object
-  (toString [coll]
-   (pr-str* coll))
   (equiv [this other]
     (-equiv this other))
   (indexOf [coll x]
@@ -1492,29 +1444,23 @@ reduces them without incurring seq initialization"
     (-lastIndexOf coll x start))
 
   ICloneable
-  (-clone [_] (IndexedSeq. arr i meta))
+  (-clone [_] (IndexedSeq. arr i))
 
   ISeqable
   (-seq [this]
     (when (< i (alength arr))
       this))
 
-  IMeta
-  (-meta [coll] meta)
-  IWithMeta
-  (-with-meta [coll new-meta]
-    (IndexedSeq. arr i new-meta))
-
   ASeq
   ISeq
   (-first [_] (aget arr i))
   (-rest [_] (if (< (inc i) (alength arr))
-               (IndexedSeq. arr (inc i) nil)
+               (IndexedSeq. arr (inc i))
                (list)))
 
   INext
   (-next [_] (if (< (inc i) (alength arr))
-               (IndexedSeq. arr (inc i) nil)
+               (IndexedSeq. arr (inc i))
                nil))
 
   ICounted
@@ -1560,7 +1506,7 @@ reduces them without incurring seq initialization"
   (-rseq [coll]
     (let [c (-count coll)]
       (if (pos? c)
-        (RSeq. coll (dec c) nil)))))
+        (RSeq. coll (dec c))))))
 
 (es6-iterable IndexedSeq)
 
@@ -1570,7 +1516,7 @@ reduces them without incurring seq initialization"
      (prim-seq prim 0))
   ([prim i]
      (when (< i (alength prim))
-       (IndexedSeq. prim i nil))))
+       (IndexedSeq. prim i))))
 
 (defn array-seq
   "Create a seq from a JavaScript array."
@@ -1579,12 +1525,10 @@ reduces them without incurring seq initialization"
   ([array i]
      (prim-seq array i)))
 
-(declare with-meta seq-reduce)
+(declare seq-reduce)
 
-(deftype RSeq [ci i meta]
+(deftype RSeq [ci i]
   Object
-  (toString [coll]
-    (pr-str* coll))
   (equiv [this other]
     (-equiv this other))
   (indexOf [coll x]
@@ -1597,13 +1541,7 @@ reduces them without incurring seq initialization"
     (-lastIndexOf coll x start))
 
   ICloneable
-  (-clone [_] (RSeq. ci i meta))
-
-  IMeta
-  (-meta [coll] meta)
-  IWithMeta
-  (-with-meta [coll new-meta]
-    (RSeq. ci i new-meta))
+  (-clone [_] (RSeq. ci i))
 
   ISeqable
   (-seq [coll] coll)
@@ -1617,13 +1555,13 @@ reduces them without incurring seq initialization"
     (-nth ci i))
   (-rest [coll]
     (if (pos? i)
-      (RSeq. ci (dec i) nil)
+      (RSeq. ci (dec i))
       ()))
   
   INext
   (-next [coll]
     (when (pos? i)
-      (RSeq. ci (dec i) nil)))
+      (RSeq. ci (dec i))))
 
   ICounted
   (-count [coll] (inc i))
@@ -1633,7 +1571,7 @@ reduces them without incurring seq initialization"
     (cons o coll))
 
   IEmptyableCollection
-  (-empty [coll] (with-meta (.-EMPTY List) meta))
+  (-empty [coll] (.-EMPTY List))
 
   IHash
   (-hash [coll] (hash-ordered-coll coll))
@@ -1900,75 +1838,6 @@ reduces them without incurring seq initialization"
   "Return true if f is a JavaScript function or satisfies the Fn protocol."
   [f]
   (or ^boolean (goog/isFunction f) (satisfies? Fn f)))
-
-(deftype MetaFn [afn meta]
-  IMeta
-  (-meta [_] meta)
-  IWithMeta
-  (-with-meta [_ new-meta]
-    (MetaFn. afn new-meta))
-  Fn
-  IFn
-  (-invoke [_]
-    (afn))
-  (-invoke [_ a]
-    (afn a))
-  (-invoke [_ a b]
-    (afn a b))
-  (-invoke [_ a b c]
-    (afn a b c))
-  (-invoke [_ a b c d]
-    (afn a b c d))
-  (-invoke [_ a b c d e]
-    (afn a b c d e))
-  (-invoke [_ a b c d e f]
-    (afn a b c d e f))
-  (-invoke [_ a b c d e f g]
-    (afn a b c d e f g))
-  (-invoke [_ a b c d e f g h]
-    (afn a b c d e f g h))
-  (-invoke [_ a b c d e f g h i]
-    (afn a b c d e f g h i))
-  (-invoke [_ a b c d e f g h i j]
-    (afn a b c d e f g h i j))
-  (-invoke [_ a b c d e f g h i j k]
-    (afn a b c d e f g h i j k))
-  (-invoke [_ a b c d e f g h i j k l]
-    (afn a b c d e f g h i j k l))
-  (-invoke [_ a b c d e f g h i j k l m]
-    (afn a b c d e f g h i j k l m))
-  (-invoke [_ a b c d e f g h i j k l m n]
-    (afn a b c d e f g h i j k l m n))
-  (-invoke [_ a b c d e f g h i j k l m n o]
-    (afn a b c d e f g h i j k l m n o))
-  (-invoke [_ a b c d e f g h i j k l m n o p]
-    (afn a b c d e f g h i j k l m n o p))
-  (-invoke [_ a b c d e f g h i j k l m n o p q]
-    (afn a b c d e f g h i j k l m n o p q))
-  (-invoke [_ a b c d e f g h i j k l m n o p q r]
-    (afn a b c d e f g h i j k l m n o p q r))
-  (-invoke [_ a b c d e f g h i j k l m n o p q r s]
-    (afn a b c d e f g h i j k l m n o p q r s))
-  (-invoke [_ a b c d e f g h i j k l m n o p q r s t]
-    (afn a b c d e f g h i j k l m n o p q r s t))
-  (-invoke [_ a b c d e f g h i j k l m n o p q r s t rest]
-    (apply afn a b c d e f g h i j k l m n o p q r s t rest)))
-
-(defn with-meta
-  "Returns an object of the same type and value as obj, with
-  map m as its metadata."
-  [o meta]
-  (if ^boolean (goog/isFunction o)
-    (MetaFn. o meta)
-    (when-not (nil? o)
-      (-with-meta o meta))))
-
-(defn meta
-  "Returns the metadata of obj, returns nil if there is no metadata."
-  [o]
-  (when (and (not (nil? o))
-             (satisfies? IMeta o))
-    (-meta o)))
 
 (defn peek
   "For a list or queue, same as first, for a vector, same as, but much
@@ -2886,10 +2755,8 @@ reduces them without incurring seq initialization"
   obj)
 
 ;;;;;;;;;;;;;;;; cons ;;;;;;;;;;;;;;;;
-(deftype List [meta first rest count ^:mutable __hash]
+(deftype List [first rest count ^:mutable __hash]
   Object
-  (toString [coll]
-    (pr-str* coll))
   (equiv [this other]
     (-equiv this other))
   (indexOf [coll x]
@@ -2904,13 +2771,7 @@ reduces them without incurring seq initialization"
   IList
 
   ICloneable
-  (-clone [_] (List. meta first rest count __hash))
-
-  IWithMeta
-  (-with-meta [coll meta] (List. meta first rest count __hash))
-
-  IMeta
-  (-meta [coll] meta)
+  (-clone [_] (List. first rest count __hash))
 
   ASeq
   ISeq
@@ -2931,10 +2792,10 @@ reduces them without incurring seq initialization"
   (-pop [coll] (-rest coll))
 
   ICollection
-  (-conj [coll o] (List. meta o coll (inc count) nil))
+  (-conj [coll o] (List. o coll (inc count) nil))
 
   IEmptyableCollection
-  (-empty [coll] (-with-meta (.-EMPTY List) meta))
+  (-empty [coll] (.-EMPTY List))
 
   ISequential
   IEquiv
@@ -2960,10 +2821,8 @@ reduces them without incurring seq initialization"
 
 (es6-iterable List)
 
-(deftype EmptyList [meta]
+(deftype EmptyList []
   Object
-  (toString [coll]
-    (pr-str* coll))
   (equiv [this other]
     (-equiv this other))
   (indexOf [coll x]
@@ -2978,13 +2837,7 @@ reduces them without incurring seq initialization"
   IList
 
   ICloneable
-  (-clone [_] (EmptyList. meta))
-
-  IWithMeta
-  (-with-meta [coll meta] (EmptyList. meta))
-
-  IMeta
-  (-meta [coll] meta)
+  (-clone [_] (EmptyList.))
 
   ISeq
   (-first [coll] nil)
@@ -2998,7 +2851,7 @@ reduces them without incurring seq initialization"
   (-pop [coll] (throw (js/Error. "Can't pop empty list")))
 
   ICollection
-  (-conj [coll o] (List. meta o nil 1 nil))
+  (-conj [coll o] (List. o nil 1 nil))
 
   IEmptyableCollection
   (-empty [coll] coll)
@@ -3024,7 +2877,7 @@ reduces them without incurring seq initialization"
   (-reduce [coll f] (seq-reduce f coll))
   (-reduce [coll f start] (seq-reduce f start coll)))
 
-(set! (.-EMPTY List) (EmptyList. nil))
+(set! (.-EMPTY List) (EmptyList.))
 
 (es6-iterable EmptyList)
 
@@ -3063,10 +2916,8 @@ reduces them without incurring seq initialization"
         (recur (dec i) (-conj r (aget arr (dec i))))
         r))))
 
-(deftype Cons [meta first rest ^:mutable __hash]
+(deftype Cons [first rest ^:mutable __hash]
   Object
-  (toString [coll]
-    (pr-str* coll))
   (equiv [this other]
     (-equiv this other))
   (indexOf [coll x]
@@ -3081,13 +2932,7 @@ reduces them without incurring seq initialization"
   IList
 
   ICloneable
-  (-clone [_] (Cons. meta first rest __hash))
-
-  IWithMeta
-  (-with-meta [coll meta] (Cons. meta first rest __hash))
-
-  IMeta
-  (-meta [coll] meta)
+  (-clone [_] (Cons. first rest __hash))
 
   ASeq
   ISeq
@@ -3099,10 +2944,10 @@ reduces them without incurring seq initialization"
     (if (nil? rest) nil (seq rest)))
 
   ICollection
-  (-conj [coll o] (Cons. nil o coll nil))
+  (-conj [coll o] (Cons. o coll nil))
 
   IEmptyableCollection
-  (-empty [coll] (with-meta (.-EMPTY List) meta))
+  (-empty [coll] (.-EMPTY List))
 
   ISequential
   IEquiv
@@ -3125,8 +2970,8 @@ reduces them without incurring seq initialization"
   [x coll]
   (if (or (nil? coll)
           (implements? ISeq coll))
-    (Cons. nil x coll nil)
-    (Cons. nil x (seq coll) nil)))
+    (Cons. x coll nil)
+    (Cons. x (seq coll) nil)))
 
 (defn hash-keyword [k]
   (int (+ (hash-symbol k) 0x9e3779b9)))
@@ -3145,7 +2990,6 @@ reduces them without incurring seq initialization"
 
 (deftype Keyword [ns name fqn ^:mutable _hash]
   Object
-  (toString [_] (str ":" fqn))
   (equiv [this other]
     (-equiv this other))
   
@@ -3253,10 +3097,8 @@ reduces them without incurring seq initialization"
      (Keyword. ns name (str (when ns (str ns "/")) name) nil))))
 
 
-(deftype LazySeq [meta ^:mutable fn ^:mutable s ^:mutable __hash]
+(deftype LazySeq [^:mutable fn ^:mutable s ^:mutable __hash]
   Object
-  (toString [coll]
-    (pr-str* coll))
   (equiv [this other]
     (-equiv this other))
   (sval [coll]
@@ -3279,12 +3121,6 @@ reduces them without incurring seq initialization"
   (-realized? [coll]
     (not fn))
 
-  IWithMeta
-  (-with-meta [coll meta] (LazySeq. meta fn s __hash))
-
-  IMeta
-  (-meta [coll] meta)
-
   ISeq
   (-first [coll]
     (-seq coll)
@@ -3306,7 +3142,7 @@ reduces them without incurring seq initialization"
   (-conj [coll o] (cons o coll))
 
   IEmptyableCollection
-  (-empty [coll] (with-meta (.-EMPTY List) meta))
+  (-empty [coll] (.-EMPTY List))
 
   ISequential
   IEquiv
@@ -3382,10 +3218,8 @@ reduces them without incurring seq initialization"
   ([arr off end]
      (ArrayChunk. arr off end)))
 
-(deftype ChunkedCons [chunk more meta ^:mutable __hash]
+(deftype ChunkedCons [chunk more ^:mutable __hash]
   Object
-  (toString [coll]
-    (pr-str* coll))
   (equiv [this other]
     (-equiv this other))
   (indexOf [coll x]
@@ -3397,13 +3231,6 @@ reduces them without incurring seq initialization"
   (lastIndexOf [coll x start]
     (-lastIndexOf coll x start))
   
-  IWithMeta
-  (-with-meta [coll m]
-    (ChunkedCons. chunk more m __hash))
-
-  IMeta
-  (-meta [coll] meta)
-
   ISequential
   IEquiv
   (-equiv [coll other] (equiv-sequential coll other))
@@ -3416,7 +3243,7 @@ reduces them without incurring seq initialization"
   (-first [coll] (-nth chunk 0))
   (-rest [coll]
     (if (> (-count chunk) 1)
-      (ChunkedCons. (-drop-first chunk) more meta nil)
+      (ChunkedCons. (-drop-first chunk) more nil)
       (if (nil? more)
         ()
         more)))
@@ -3424,7 +3251,7 @@ reduces them without incurring seq initialization"
   INext
   (-next [coll]
     (if (> (-count chunk) 1)
-      (ChunkedCons. (-drop-first chunk) more meta nil)
+      (ChunkedCons. (-drop-first chunk) more nil)
       (let [more (-seq more)]
         (when-not (nil? more)
           more))))
@@ -3447,7 +3274,7 @@ reduces them without incurring seq initialization"
     (cons o this))
 
   IEmptyableCollection
-  (-empty [coll] (with-meta (.-EMPTY List) meta))
+  (-empty [coll] (.-EMPTY List))
 
   IHash
   (-hash [coll] (caching-hash coll hash-ordered-coll __hash)))
@@ -3457,7 +3284,7 @@ reduces them without incurring seq initialization"
 (defn chunk-cons [chunk rest]
   (if (zero? (-count chunk))
     rest
-    (ChunkedCons. chunk rest nil nil)))
+    (ChunkedCons. chunk rest nil)))
 
 (defn chunk-append [b x]
   (.add b x))
@@ -3764,22 +3591,6 @@ reduces them without incurring seq initialization"
          (.apply f f (to-array arglist))))))
 (set! *unchecked-if* false)
 
-(defn vary-meta
- "Returns an object of the same type and value as obj, with
-  (apply f (meta obj) args) as its metadata."
-  ([obj f]
-   (with-meta obj (f (meta obj))))
-  ([obj f a]
-   (with-meta obj (f (meta obj) a)))
-  ([obj f a b]
-   (with-meta obj (f (meta obj) a b)))
-  ([obj f a b c]
-   (with-meta obj (f (meta obj) a b c)))
-  ([obj f a b c d]
-   (with-meta obj (f (meta obj) a b c d)))
-  ([obj f a b c d & args]
-   (with-meta obj (apply f (meta obj) a b c d args))))
-
 (defn ^boolean not=
   "Same as (not (= obj1 obj2))"
   ([x] false)
@@ -3858,7 +3669,7 @@ reduces them without incurring seq initialization"
 (declare LazyTransformer)
 
 (defn lazy-transformer [stepper]
-  (LazyTransformer. stepper nil nil nil))
+  (LazyTransformer. stepper nil nil))
 
 (deftype Stepper [xform iter]
   Object
@@ -3934,7 +3745,7 @@ reduces them without incurring seq initialization"
                     (.-rest lt))))]
        (MultiStepper. (xform stepfn) iters nexts))))
 
-(deftype LazyTransformer [^:mutable stepper ^:mutable first ^:mutable rest meta]
+(deftype LazyTransformer [^:mutable stepper ^:mutable first ^:mutable rest]
   Object
   (indexOf [coll x]
     (-indexOf coll x 0))
@@ -3944,13 +3755,6 @@ reduces them without incurring seq initialization"
     (-lastIndexOf coll x (count coll)))
   (lastIndexOf [coll x start]
     (-lastIndexOf coll x start))
-
-  IWithMeta
-  (-with-meta [this new-meta]
-    (LazyTransformer. stepper first rest new-meta))
-
-  IMeta
-  (-meta [this] meta)
 
   ICollection
   (-conj [this o]
@@ -4008,7 +3812,7 @@ reduces them without incurring seq initialization"
 
 (set! (.-create LazyTransformer)
   (fn [xform coll]
-    (LazyTransformer. (stepper xform (iter coll)) nil nil nil)))
+    (LazyTransformer. (stepper xform (iter coll)) nil nil)))
 
 (set! (.-createMulti LazyTransformer)
   (fn [xform colls]
@@ -4017,7 +3821,7 @@ reduces them without incurring seq initialization"
         (.push iters (iter coll)))
       (LazyTransformer.
         (multi-stepper xform iters (make-array (alength iters)))
-        nil nil nil))))
+        nil nil))))
 
 (defn sequence
   "Coerces coll to a (possibly empty) sequence, if it is not already
@@ -4234,7 +4038,7 @@ reduces them without incurring seq initialization"
 ;; =============================================================================
 ;; Atom
 
-(deftype Atom [state meta validator watches]
+(deftype Atom [state validator watches]
   Object
   (equiv [this other]
     (-equiv this other))
@@ -4246,9 +4050,6 @@ reduces them without incurring seq initialization"
 
   IDeref
   (-deref [_] state)
-
-  IMeta
-  (-meta [_] meta)
 
   IWatchable
   (-notify-watches [this oldval newval]
@@ -4267,18 +4068,15 @@ reduces them without incurring seq initialization"
   "Creates and returns an Atom with an initial value of x and zero or
   more options (in any order):
 
-  :meta metadata-map
-
   :validator validate-fn
 
-  If metadata-map is supplied, it will be come the metadata on the
-  atom. validate-fn must be nil or a side-effect-free fn of one
+  validate-fn must be nil or a side-effect-free fn of one
   argument, which will be passed the intended new state on any state
   change. If the new state is unacceptable, the validate-fn should
   return false or throw an Error.  If either of these error conditions
   occur, then the value of the atom will not change."
-  ([x] (Atom. x nil nil nil))
-  ([x & {:keys [meta validator]}] (Atom. x meta validator nil)))
+  ([x] (Atom. x nil nil))
+  ([x & {:keys [validator]}] (Atom. x validator nil)))
 
 (declare pr-str)
 
@@ -4296,7 +4094,7 @@ reduces them without incurring seq initialization"
         (when-not (nil? (.-watches a))
           (-notify-watches a old-value new-value))
         new-value))
-    (-reset! a new-value)))
+    (throw (js/Error. "reset! expects an atom"))))
 
 (defn swap!
   "Atomically swaps the value of atom to be:
@@ -4306,19 +4104,19 @@ reduces them without incurring seq initialization"
   ([a f]
      (if (instance? Atom a)
        (reset! a (f (.-state a)))
-       (-swap! a f)))
+       (throw (js/Error. "swap! expects an atom"))))
   ([a f x]
      (if (instance? Atom a)
        (reset! a (f (.-state a) x))
-       (-swap! a f x)))
+       (throw (js/Error. "swap! expects an atom"))))
   ([a f x y]
      (if (instance? Atom a)
        (reset! a (f (.-state a) x y))
-       (-swap! a f x y)))
+       (throw (js/Error. "swap! expects an atom"))))
   ([a f x y & more]
      (if (instance? Atom a)
        (reset! a (apply f (.-state a) x y more))
-       (-swap! a f x y more))))
+       (throw (js/Error. "swap! expects an atom")))))
 
 (defn compare-and-set!
   "Atomically sets the value of atom to newval if and only if the
@@ -4779,12 +4577,12 @@ reduces them without incurring seq initialization"
   ([to from]
      (if-not (nil? to)
        (if (implements? IEditableCollection to)
-         (with-meta (persistent! (reduce -conj! (transient to) from)) (meta to))
+         (persistent! (reduce -conj! (transient to) from))
          (reduce -conj to from))
        (reduce conj () from)))
   ([to xform from]
      (if (implements? IEditableCollection to)
-       (with-meta (persistent! (transduce xform conj! (transient to) from)) (meta to))
+       (persistent! (transduce xform conj! (transient to) from))
        (transduce xform conj to from))))
 
 (defn mapv
@@ -5026,10 +4824,8 @@ reduces them without incurring seq initialization"
 (declare tv-editable-root tv-editable-tail TransientVector deref
          pr-sequential-writer pr-writer chunked-seq)
 
-(deftype PersistentVector [meta cnt shift root tail ^:mutable __hash]
+(deftype PersistentVector [cnt shift root tail ^:mutable __hash]
   Object
-  (toString [coll]
-    (pr-str* coll))
   (equiv [this other]
     (-equiv this other))
   (indexOf [coll x]
@@ -5042,13 +4838,7 @@ reduces them without incurring seq initialization"
     (-lastIndexOf coll x start))
 
   ICloneable
-  (-clone [_] (PersistentVector. meta cnt shift root tail __hash))
-
-  IWithMeta
-  (-with-meta [coll meta] (PersistentVector. meta cnt shift root tail __hash))
-
-  IMeta
-  (-meta [coll] meta)
+  (-clone [_] (PersistentVector. cnt shift root tail __hash))
 
   IStack
   (-peek [coll]
@@ -5057,16 +4847,16 @@ reduces them without incurring seq initialization"
   (-pop [coll]
     (cond
      (zero? cnt) (throw (js/Error. "Can't pop empty vector"))
-     (== 1 cnt) (-with-meta (.-EMPTY PersistentVector) meta)
+     (== 1 cnt) (.-EMPTY PersistentVector)
      (< 1 (- cnt (tail-off coll)))
-      (PersistentVector. meta (dec cnt) shift root (.slice tail 0 -1) nil)
+      (PersistentVector. (dec cnt) shift root (.slice tail 0 -1) nil)
       :else (let [new-tail (unchecked-array-for coll (- cnt 2))
                   nr (pop-tail coll shift root)
                   new-root (if (nil? nr) (.-EMPTY-NODE PersistentVector) nr)
                   cnt-1 (dec cnt)]
               (if (and (< 5 shift) (nil? (pv-aget new-root 1)))
-                (PersistentVector. meta cnt-1 (- shift 5) (pv-aget new-root 0) new-tail nil)
-                (PersistentVector. meta cnt-1 shift new-root new-tail nil)))))
+                (PersistentVector. cnt-1 (- shift 5) (pv-aget new-root 0) new-tail nil)
+                (PersistentVector. cnt-1 shift new-root new-tail nil)))))
 
   ICollection
   (-conj [coll o]
@@ -5076,7 +4866,7 @@ reduces them without incurring seq initialization"
         (dotimes [i len]
           (aset new-tail i (aget tail i)))
         (aset new-tail len o)
-        (PersistentVector. meta (inc cnt) shift root new-tail nil))
+        (PersistentVector. (inc cnt) shift root new-tail nil))
       (let [root-overflow? (> (bit-shift-right-zero-fill cnt 5) (bit-shift-left 1 shift))
             new-shift (if root-overflow? (+ shift 5) shift)
             new-root (if root-overflow?
@@ -5085,10 +4875,10 @@ reduces them without incurring seq initialization"
                            (pv-aset n-r 1 (new-path nil shift (VectorNode. nil tail)))
                            n-r)
                        (push-tail coll shift root (VectorNode. nil tail)))]
-        (PersistentVector. meta (inc cnt) new-shift new-root (array o) nil))))
+        (PersistentVector. (inc cnt) new-shift new-root (array o) nil))))
 
   IEmptyableCollection
-  (-empty [coll] (with-meta (.-EMPTY PersistentVector) meta))
+  (-empty [coll] (.-EMPTY PersistentVector))
 
   ISequential
   IEquiv
@@ -5115,7 +4905,7 @@ reduces them without incurring seq initialization"
   (-seq [coll]
     (cond
       (zero? cnt) nil
-      (<= cnt 32) (IndexedSeq. tail 0 nil)
+      (<= cnt 32) (IndexedSeq. tail 0)
       :else (chunked-seq coll (first-array-for-longvec coll) 0 0)))
 
   ICounted
@@ -5154,8 +4944,8 @@ reduces them without incurring seq initialization"
        (if (<= (tail-off coll) n)
          (let [new-tail (aclone tail)]
            (aset new-tail (bit-and n 0x01f) val)
-           (PersistentVector. meta cnt shift root new-tail nil))
-         (PersistentVector. meta cnt shift (do-assoc coll shift root n val) tail nil))
+           (PersistentVector. cnt shift root new-tail nil))
+         (PersistentVector. cnt shift (do-assoc coll shift root n val) tail nil))
        (== n cnt) (-conj coll val)
        :else (throw (js/Error. (str "Index " n " out of bounds  [0," cnt "]")))))
 
@@ -5210,7 +5000,7 @@ reduces them without incurring seq initialization"
   IReversible
   (-rseq [coll]
     (if (pos? cnt)
-      (RSeq. coll (dec cnt) nil)))
+      (RSeq. coll (dec cnt))))
 
   IIterable
   (-iterator [this]
@@ -5219,16 +5009,16 @@ reduces them without incurring seq initialization"
 (set! (.-EMPTY-NODE PersistentVector) (VectorNode. nil (make-array 32)))
 
 (set! (.-EMPTY PersistentVector)
-  (PersistentVector. nil 0 5 (.-EMPTY-NODE PersistentVector) (array) empty-ordered-hash))
+  (PersistentVector. 0 5 (.-EMPTY-NODE PersistentVector) (array) empty-ordered-hash))
 
 (set! (.-fromArray PersistentVector)
   (fn [xs ^boolean no-clone]
     (let [l (alength xs)
           xs (if no-clone xs (aclone xs))]
       (if (< l 32)
-        (PersistentVector. nil l 5 (.-EMPTY-NODE PersistentVector) xs nil)
+        (PersistentVector. l 5 (.-EMPTY-NODE PersistentVector) xs nil)
         (let [node (.slice xs 0 32)
-              v (PersistentVector. nil 32 5 (.-EMPTY-NODE PersistentVector) node nil)]
+              v (PersistentVector. 32 5 (.-EMPTY-NODE PersistentVector) node nil)]
           (loop [i 32 out (-as-transient v)]
             (if (< i l)
               (recur (inc i) (conj! out (aget xs i)))
@@ -5256,10 +5046,8 @@ reduces them without incurring seq initialization"
 
 (declare subvec)
 
-(deftype ChunkedSeq [vec node i off meta ^:mutable __hash]
+(deftype ChunkedSeq [vec node i off ^:mutable __hash]
   Object
-  (toString [coll]
-    (pr-str* coll))
   (equiv [this other]
     (-equiv this other))
   (indexOf [coll x]
@@ -5270,12 +5058,6 @@ reduces them without incurring seq initialization"
     (-lastIndexOf coll x (count coll)))
   (lastIndexOf [coll x start]
     (-lastIndexOf coll x start))
-
-  IWithMeta
-  (-with-meta [coll m]
-    (chunked-seq vec node i off m))
-  IMeta
-  (-meta [coll] meta)
 
   ISeqable
   (-seq [coll] coll)
@@ -5310,8 +5092,7 @@ reduces them without incurring seq initialization"
     (cons o coll))
 
   IEmptyableCollection
-  (-empty [coll]
-    (with-meta (.-EMPTY PersistentVector) meta))
+  (-empty [coll] (.-EMPTY PersistentVector))
 
   IChunkedSeq
   (-chunked-first [coll]
@@ -5341,17 +5122,13 @@ reduces them without incurring seq initialization"
 (es6-iterable ChunkedSeq)
 
 (defn chunked-seq
-  ([vec i off] (ChunkedSeq. vec (array-for vec i) i off nil nil))
-  ([vec node i off] (ChunkedSeq. vec node i off nil nil))
-  ([vec node i off meta]
-     (ChunkedSeq. vec node i off meta nil)))
+  ([vec i off] (ChunkedSeq. vec (array-for vec i) i off nil))
+  ([vec node i off] (ChunkedSeq. vec node i off nil)))
 
 (declare build-subvec)
 
-(deftype Subvec [meta v start end ^:mutable __hash]
+(deftype Subvec [v start end ^:mutable __hash]
   Object
-  (toString [coll]
-    (pr-str* coll))
   (equiv [this other]
     (-equiv this other))
   (indexOf [coll x]
@@ -5364,13 +5141,7 @@ reduces them without incurring seq initialization"
     (-lastIndexOf coll x start))
 
   ICloneable
-  (-clone [_] (Subvec. meta v start end __hash))
-
-  IWithMeta
-  (-with-meta [coll meta] (build-subvec meta v start end __hash))
-
-  IMeta
-  (-meta [coll] meta)
+  (-clone [_] (Subvec. v start end __hash))
 
   IStack
   (-peek [coll]
@@ -5378,14 +5149,14 @@ reduces them without incurring seq initialization"
   (-pop [coll]
     (if (== start end)
       (throw (js/Error. "Can't pop empty vector"))
-      (build-subvec meta v start (dec end) nil)))
+      (build-subvec v start (dec end) nil)))
 
   ICollection
   (-conj [coll o]
-    (build-subvec meta (-assoc-n v end o) start (inc end) nil))
+    (build-subvec (-assoc-n v end o) start (inc end) nil))
 
   IEmptyableCollection
-  (-empty [coll] (with-meta (.-EMPTY PersistentVector) meta))
+  (-empty [coll] (.-EMPTY PersistentVector))
 
   ISequential
   IEquiv
@@ -5406,7 +5177,7 @@ reduces them without incurring seq initialization"
   IReversible
   (-rseq [coll]
     (if-not (== start end)
-      (RSeq. coll (dec (- end start)) nil)))
+      (RSeq. coll (dec (- end start)))))
 
   ICounted
   (-count [coll] (- end start))
@@ -5438,7 +5209,7 @@ reduces them without incurring seq initialization"
     (let [v-pos (+ start n)]
       (if (or (neg? n) (<= (inc end) v-pos))
         (throw (js/Error. (str "Index " n " out of bounds [0," (-count coll) "]")))
-        (build-subvec meta (assoc v v-pos val) start (max end (inc v-pos)) nil))))
+        (build-subvec (assoc v v-pos val) start (max end (inc v-pos)) nil))))
 
   IReduce
   (-reduce [coll f]
@@ -5468,16 +5239,16 @@ reduces them without incurring seq initialization"
 
 (es6-iterable Subvec)
 
-(defn- build-subvec [meta v start end __hash]
+(defn- build-subvec [v start end __hash]
   (if (instance? Subvec v)
-    (recur meta (.-v v) (+ (.-start v) start) (+ (.-start v) end) __hash)
+    (recur (.-v v) (+ (.-start v) start) (+ (.-start v) end) __hash)
     (let [c (count v)]
       (when (or (neg? start)
                 (neg? end)
                 (> start c)
                 (> end c))
         (throw (js/Error. "Index out of bounds")))
-      (Subvec. meta v start end __hash))))
+      (Subvec. v start end __hash))))
 
 (defn subvec
   "Returns a persistent vector of the items in vector from
@@ -5488,7 +5259,7 @@ reduces them without incurring seq initialization"
   ([v start]
      (subvec v start (count v)))
   ([v start end]
-     (build-subvec nil v start end nil)))
+     (build-subvec v start end nil)))
 
 (defn- tv-ensure-editable [edit node]
   (if (identical? edit (.-edit node))
@@ -5582,7 +5353,7 @@ reduces them without incurring seq initialization"
           (let [len (- cnt (tail-off tcoll))
                 trimmed-tail (make-array len)]
             (array-copy tail 0 trimmed-tail 0 len)
-            (PersistentVector. nil cnt shift root trimmed-tail nil)))
+            (PersistentVector. cnt shift root trimmed-tail nil)))
       (throw (js/Error. "persistent! called twice"))))
 
   ITransientAssociative
@@ -5693,10 +5464,8 @@ reduces them without incurring seq initialization"
       :else (throw (js/Error. "No such element"))))
   (remove [_] (js/Error. "Unsupported operation")))
 
-(deftype PersistentQueueSeq [meta front rear ^:mutable __hash]
+(deftype PersistentQueueSeq [front rear ^:mutable __hash]
   Object
-  (toString [coll]
-    (pr-str* coll))
   (equiv [this other]
     (-equiv this other))
   (indexOf [coll x]
@@ -5708,26 +5477,20 @@ reduces them without incurring seq initialization"
   (lastIndexOf [coll x start]
     (-lastIndexOf coll x start))
 
-  IWithMeta
-  (-with-meta [coll meta] (PersistentQueueSeq. meta front rear __hash))
-
-  IMeta
-  (-meta [coll] meta)
-
   ISeq
   (-first [coll] (first front))
   (-rest  [coll]
     (if-let [f1 (next front)]
-      (PersistentQueueSeq. meta f1 rear nil)
+      (PersistentQueueSeq. f1 rear nil)
       (if (nil? rear)
         (-empty coll)
-        (PersistentQueueSeq. meta rear nil nil))))
+        (PersistentQueueSeq. rear nil nil))))
 
   ICollection
   (-conj [coll o] (cons o coll))
 
   IEmptyableCollection
-  (-empty [coll] (with-meta (.-EMPTY List) meta))
+  (-empty [coll] (.-EMPTY List))
 
   ISequential
   IEquiv
@@ -5741,10 +5504,8 @@ reduces them without incurring seq initialization"
 
 (es6-iterable PersistentQueueSeq)
 
-(deftype PersistentQueue [meta count front rear ^:mutable __hash]
+(deftype PersistentQueue [count front rear ^:mutable __hash]
   Object
-  (toString [coll]
-    (pr-str* coll))
   (equiv [this other]
     (-equiv this other))
   (indexOf [coll x]
@@ -5757,17 +5518,11 @@ reduces them without incurring seq initialization"
     (-lastIndexOf coll x start))
 
   ICloneable
-  (-clone [coll] (PersistentQueue. meta count front rear __hash))
+  (-clone [coll] (PersistentQueue. count front rear __hash))
 
   IIterable
   (-iterator [coll]
     (PersistentQueueIter. front (-iterator rear)))
-
-  IWithMeta
-  (-with-meta [coll meta] (PersistentQueue. meta count front rear __hash))
-
-  IMeta
-  (-meta [coll] meta)
 
   ISeq
   (-first [coll] (first front))
@@ -5778,18 +5533,18 @@ reduces them without incurring seq initialization"
   (-pop [coll]
     (if front
       (if-let [f1 (next front)]
-        (PersistentQueue. meta (dec count) f1 rear nil)
-        (PersistentQueue. meta (dec count) (seq rear) [] nil))
+        (PersistentQueue. (dec count) f1 rear nil)
+        (PersistentQueue. (dec count) (seq rear) [] nil))
       coll))
 
   ICollection
   (-conj [coll o]
     (if front
-      (PersistentQueue. meta (inc count) front (conj (or rear []) o) nil)
-      (PersistentQueue. meta (inc count) (conj front o) [] nil)))
+      (PersistentQueue. (inc count) front (conj (or rear []) o) nil)
+      (PersistentQueue. (inc count) (conj front o) [] nil)))
 
   IEmptyableCollection
-  (-empty [coll] (with-meta (.-EMPTY PersistentQueue) meta))
+  (-empty [coll] (.-EMPTY PersistentQueue))
 
   ISequential
   IEquiv
@@ -5802,12 +5557,12 @@ reduces them without incurring seq initialization"
   (-seq [coll]
     (let [rear (seq rear)]
       (if (or front rear)
-        (PersistentQueueSeq. nil front (seq rear) nil))))
+        (PersistentQueueSeq. front (seq rear) nil))))
 
   ICounted
   (-count [coll] count))
 
-(set! (.-EMPTY PersistentQueue) (PersistentQueue. nil 0 nil [] empty-ordered-hash))
+(set! (.-EMPTY PersistentQueue) (PersistentQueue. 0 nil [] empty-ordered-hash))
 
 (es6-iterable PersistentQueue)
 
@@ -5840,154 +5595,6 @@ reduces them without incurring seq initialization"
         (if (identical? k (aget array i))
           i
           (recur (+ i incr)))))))
-
-; The keys field is an array of all keys of this map, in no particular
-; order. Any string, keyword, or symbol key is used as a property name
-; to store the value in strobj.  If a key is assoc'ed when that same
-; key already exists in strobj, the old value is overwritten. If a
-; non-string key is assoc'ed, return a HashMap object instead.
-
-(defn- obj-map-compare-keys [a b]
-  (let [a (hash a)
-        b (hash b)]
-    (cond
-     (< a b) -1
-     (> a b) 1
-     :else 0)))
-
-(defn- obj-map->hash-map [m k v]
-  (let [ks  (.-keys m)
-        len (alength ks)
-        so  (.-strobj m)
-        mm  (meta m)]
-    (loop [i   0
-           out (transient (.-EMPTY PersistentHashMap))]
-      (if (< i len)
-        (let [k (aget ks i)]
-          (recur (inc i) (assoc! out k (aget so k))))
-        (with-meta (persistent! (assoc! out k v)) mm)))))
-
-;;; ObjMap - DEPRECATED
-
-(defn- obj-clone [obj ks]
-  (let [new-obj (js-obj)
-        l (alength ks)]
-    (loop [i 0]
-      (when (< i l)
-        (let [k (aget ks i)]
-          (aset new-obj k (aget obj k))
-          (recur (inc i)))))
-    new-obj))
-
-(deftype ObjMap [meta keys strobj update-count ^:mutable __hash]
-  Object
-  (toString [coll]
-    (pr-str* coll))
-  (equiv [this other]
-    (-equiv this other))
-
-  IWithMeta
-  (-with-meta [coll meta] (ObjMap. meta keys strobj update-count __hash))
-
-  IMeta
-  (-meta [coll] meta)
-
-  ICollection
-  (-conj [coll entry]
-    (if (vector? entry)
-      (-assoc coll (-nth entry 0) (-nth entry 1))
-      (reduce -conj
-              coll
-              entry)))
-
-  IEmptyableCollection
-  (-empty [coll] (with-meta (.-EMPTY ObjMap) meta))
-
-  IEquiv
-  (-equiv [coll other] (equiv-map coll other))
-
-  IHash
-  (-hash [coll] (caching-hash coll hash-unordered-coll __hash))
-
-  ISeqable
-  (-seq [coll]
-    (when (pos? (alength keys))
-      (map #(vector % (aget strobj %))
-           (.sort keys obj-map-compare-keys))))
-
-  ICounted
-  (-count [coll] (alength keys))
-
-  ILookup
-  (-lookup [coll k] (-lookup coll k nil))
-  (-lookup [coll k not-found]
-    (if (and ^boolean (goog/isString k)
-             (not (nil? (scan-array 1 k keys))))
-      (aget strobj k)
-      not-found))
-
-  IAssociative
-  (-assoc [coll k v]
-    (if ^boolean (goog/isString k)
-        (if (or (> update-count (.-HASHMAP_THRESHOLD ObjMap))
-                (>= (alength keys) (.-HASHMAP_THRESHOLD ObjMap)))
-          (obj-map->hash-map coll k v)
-          (if-not (nil? (scan-array 1 k keys))
-            (let [new-strobj (obj-clone strobj keys)]
-              (aset new-strobj k v)
-              (ObjMap. meta keys new-strobj (inc update-count) nil)) ; overwrite
-            (let [new-strobj (obj-clone strobj keys) ; append
-                  new-keys (aclone keys)]
-              (aset new-strobj k v)
-              (.push new-keys k)
-              (ObjMap. meta new-keys new-strobj (inc update-count) nil))))
-        ;; non-string key. game over.
-        (obj-map->hash-map coll k v)))
-  (-contains-key? [coll k]
-    (if (and ^boolean (goog/isString k)
-             (not (nil? (scan-array 1 k keys))))
-      true
-      false))
-
-  IKVReduce
-  (-kv-reduce [coll f init]
-    (let [len (alength keys)]
-      (loop [keys (.sort keys obj-map-compare-keys)
-             init init]
-        (if (seq keys)
-          (let [k (first keys)
-                init (f init k (aget strobj k))]
-            (if (reduced? init)
-              @init
-              (recur (rest keys) init)))
-          init))))
-
-  IMap
-  (-dissoc [coll k]
-    (if (and ^boolean (goog/isString k)
-             (not (nil? (scan-array 1 k keys))))
-      (let [new-keys (aclone keys)
-            new-strobj (obj-clone strobj keys)]
-        (.splice new-keys (scan-array 1 k new-keys) 1)
-        (js-delete new-strobj k)
-        (ObjMap. meta new-keys new-strobj (inc update-count) nil))
-      coll)) ; key not found, return coll unchanged
-
-  IFn
-  (-invoke [coll k]
-    (-lookup coll k))
-  (-invoke [coll k not-found]
-    (-lookup coll k not-found))
-
-  IEditableCollection
-  (-as-transient [coll]
-    (transient (into (hash-map) coll))))
-
-(set! (.-EMPTY ObjMap) (ObjMap. nil (array) (js-obj) 0 empty-unordered-hash))
-
-(set! (.-HASHMAP_THRESHOLD ObjMap) 8)
-
-(set! (.-fromObject ObjMap) (fn [ks obj] (ObjMap. nil ks obj 0 nil)))
 
 ;; Record Iterator
 (deftype RecordIter [^:mutable i record base-count fields ext-map-iter]
@@ -6107,10 +5714,8 @@ reduces them without incurring seq initialization"
 
 (declare TransientArrayMap)
 
-(deftype PersistentArrayMapSeq [arr i _meta]
+(deftype PersistentArrayMapSeq [arr i]
   Object
-  (toString [coll]
-    (pr-str* coll))
   (equiv [this other]
     (-equiv this other))
   (indexOf [coll x]
@@ -6122,13 +5727,6 @@ reduces them without incurring seq initialization"
   (lastIndexOf [coll x start]
     (-lastIndexOf coll x start))
   
-  IMeta
-  (-meta [coll] _meta)
-
-  IWithMeta
-  (-with-meta [coll new-meta]
-    (PersistentArrayMapSeq. arr i new-meta))
-
   ICounted
   (-count [coll]
     (/ (- (alength arr) i) 2))
@@ -6145,7 +5743,7 @@ reduces them without incurring seq initialization"
     (cons o coll))
 
   IEmptyableCollection
-  (-empty [coll] (with-meta (.-EMPTY List) _meta))
+  (-empty [coll] (.-EMPTY List))
 
   IHash
   (-hash [coll] (hash-ordered-coll coll))
@@ -6156,13 +5754,13 @@ reduces them without incurring seq initialization"
 
   (-rest [coll]
     (if (< i (- (alength arr) 2))
-      (PersistentArrayMapSeq. arr (+ i 2) _meta)
+      (PersistentArrayMapSeq. arr (+ i 2))
       ()))
 
   INext
   (-next [coll]
     (when (< i (- (alength arr) 2))
-      (PersistentArrayMapSeq. arr (+ i 2) _meta)))
+      (PersistentArrayMapSeq. arr (+ i 2))))
 
   IReduce
   (-reduce [coll f] (seq-reduce f coll))
@@ -6170,9 +5768,9 @@ reduces them without incurring seq initialization"
 
 (es6-iterable PersistentArrayMapSeq)
 
-(defn persistent-array-map-seq [arr i _meta]
+(defn persistent-array-map-seq [arr i]
   (when (<= i (- (alength arr) 2))
-    (PersistentArrayMapSeq. arr i _meta)))
+    (PersistentArrayMapSeq. arr i)))
 
 (declare keys vals)
 
@@ -6185,10 +5783,8 @@ reduces them without incurring seq initialization"
       (set! i (+ i 2))
       ret)))
 
-(deftype PersistentArrayMap [meta cnt arr ^:mutable __hash]
+(deftype PersistentArrayMap [cnt arr ^:mutable __hash]
   Object
-  (toString [coll]
-    (pr-str* coll))
   (equiv [this other]
     (-equiv this other))
 
@@ -6208,13 +5804,7 @@ reduces them without incurring seq initialization"
       (f v k)))
 
   ICloneable
-  (-clone [_] (PersistentArrayMap. meta cnt arr __hash))
-
-  IWithMeta
-  (-with-meta [coll meta] (PersistentArrayMap. meta cnt arr __hash))
-
-  IMeta
-  (-meta [coll] meta)
+  (-clone [_] (PersistentArrayMap. cnt arr __hash))
 
   ICollection
   (-conj [coll entry]
@@ -6230,7 +5820,7 @@ reduces them without incurring seq initialization"
               (throw (js/Error. "conj on a map takes map entries or seqables of map entries"))))))))
 
   IEmptyableCollection
-  (-empty [coll] (-with-meta (.-EMPTY PersistentArrayMap) meta))
+  (-empty [coll] (.-EMPTY PersistentArrayMap))
 
   IEquiv
   (-equiv [coll other]
@@ -6259,7 +5849,7 @@ reduces them without incurring seq initialization"
   
   ISeqable
   (-seq [coll]
-    (persistent-array-map-seq arr 0 nil))
+    (persistent-array-map-seq arr 0))
 
   ICounted
   (-count [coll] cnt)
@@ -6281,10 +5871,9 @@ reduces them without incurring seq initialization"
         (== idx -1)
         (if (< cnt (.-HASHMAP-THRESHOLD PersistentArrayMap))
           (let [arr (array-map-extend-kv coll k v)]
-            (PersistentArrayMap. meta (inc cnt) arr nil))
+            (PersistentArrayMap. (inc cnt) arr nil))
           (-> (into (.-EMPTY PersistentHashMap) coll)
-            (-assoc k v)
-            (-with-meta meta)))
+              (-assoc k v)))
 
         (identical? v (aget arr (inc idx)))
         coll
@@ -6292,7 +5881,7 @@ reduces them without incurring seq initialization"
         :else
         (let [arr (doto (aclone arr)
                     (aset (inc idx) v))]
-          (PersistentArrayMap. meta cnt arr nil)))))
+          (PersistentArrayMap. cnt arr nil)))))
 
   (-contains-key? [coll k]
     (not (== (array-map-index-of coll k) -1)))
@@ -6308,7 +5897,7 @@ reduces them without incurring seq initialization"
             (let [new-arr (make-array new-len)]
               (loop [s 0 d 0]
                 (cond
-                  (>= s len) (PersistentArrayMap. meta (dec cnt) new-arr nil)
+                  (>= s len) (PersistentArrayMap. (dec cnt) new-arr nil)
                   (= k (aget arr s)) (recur (+ s 2) d)
                   :else (do (aset new-arr d (aget arr s))
                             (aset new-arr (inc d) (aget arr (inc s)))
@@ -6343,7 +5932,7 @@ reduces them without incurring seq initialization"
   (-as-transient [coll]
     (TransientArrayMap. (js-obj) (alength arr) (aclone arr))))
 
-(set! (.-EMPTY PersistentArrayMap) (PersistentArrayMap. nil 0 (array) empty-unordered-hash))
+(set! (.-EMPTY PersistentArrayMap) (PersistentArrayMap. 0 (array) empty-unordered-hash))
 
 (set! (.-HASHMAP-THRESHOLD PersistentArrayMap) 8)
 
@@ -6364,7 +5953,7 @@ reduces them without incurring seq initialization"
               (recur (+ i 2))))
           ret))
       (let [cnt (/ (alength arr) 2)]
-        (PersistentArrayMap. nil cnt arr nil)))))
+        (PersistentArrayMap. cnt arr nil)))))
 
 (set! (.-createWithCheck PersistentArrayMap)
   (fn [arr]
@@ -6379,7 +5968,7 @@ reduces them without incurring seq initialization"
               (throw (js/Error. (str "Duplicate key: " k)))))
           (recur (+ i 2))))
       (let [cnt (/ (alength arr) 2)]
-        (PersistentArrayMap. nil cnt arr nil)))))
+        (PersistentArrayMap. cnt arr nil)))))
 
 (set! (.-createAsIfByAssoc PersistentArrayMap)
   (fn [arr]
@@ -6393,7 +5982,7 @@ reduces them without incurring seq initialization"
               (doto ret (.push k) (.push v))
               (aset ret (inc idx) v)))
           (recur (+ i 2))))
-      (PersistentArrayMap. nil (/ (alength ret) 2) ret nil))))
+      (PersistentArrayMap. (/ (alength ret) 2) ret nil))))
 
 (es6-iterable PersistentArrayMap)
 
@@ -6435,7 +6024,7 @@ reduces them without incurring seq initialization"
   (-persistent! [tcoll]
     (if editable?
       (do (set! editable? false)
-          (PersistentArrayMap. nil (quot len 2) arr nil))
+          (PersistentArrayMap. (quot len 2) arr nil))
       (throw (js/Error. "persistent! called twice"))))
 
   ITransientAssociative
@@ -7044,10 +6633,8 @@ reduces them without incurring seq initialization"
                (.inode-assoc! edit shift key1hash key1 val1 added-leaf?)
                (.inode-assoc! edit shift key2hash key2 val2 added-leaf?)))))))
 
-(deftype NodeSeq [meta nodes i s ^:mutable __hash]
+(deftype NodeSeq [nodes i s ^:mutable __hash]
   Object
-  (toString [coll]
-    (pr-str* coll))
   (equiv [this other]
     (-equiv this other))
   (indexOf [coll x]
@@ -7059,17 +6646,11 @@ reduces them without incurring seq initialization"
   (lastIndexOf [coll x start]
     (-lastIndexOf coll x start))
 
-  IMeta
-  (-meta [coll] meta)
-
-  IWithMeta
-  (-with-meta [coll meta] (NodeSeq. meta nodes i s __hash))
-
   ICollection
   (-conj [coll o] (cons o coll))
 
   IEmptyableCollection
-  (-empty [coll] (with-meta (.-EMPTY List) meta))
+  (-empty [coll] (.-EMPTY List))
 
   ISequential
   ISeq
@@ -7108,18 +6689,16 @@ reduces them without incurring seq initialization"
          (loop [j i]
            (if (< j len)
              (if-not (nil? (aget nodes j))
-               (NodeSeq. nil nodes j nil nil)
+               (NodeSeq. nodes j nil nil)
                (if-let [node (aget nodes (inc j))]
                  (if-let [node-seq (.inode-seq node)]
-                   (NodeSeq. nil nodes (+ j 2) node-seq nil)
+                   (NodeSeq. nodes (+ j 2) node-seq nil)
                    (recur (+ j 2)))
                  (recur (+ j 2)))))))
-       (NodeSeq. nil nodes i s nil))))
+       (NodeSeq. nodes i s nil))))
 
-(deftype ArrayNodeSeq [meta nodes i s ^:mutable __hash]
+(deftype ArrayNodeSeq [nodes i s ^:mutable __hash]
   Object
-  (toString [coll]
-    (pr-str* coll))
   (equiv [this other]
     (-equiv this other))
   (indexOf [coll x]
@@ -7131,23 +6710,17 @@ reduces them without incurring seq initialization"
   (lastIndexOf [coll x start]
     (-lastIndexOf coll x start))
 
-  IMeta
-  (-meta [coll] meta)
-
-  IWithMeta
-  (-with-meta [coll meta] (ArrayNodeSeq. meta nodes i s __hash))
-
   ICollection
   (-conj [coll o] (cons o coll))
 
   IEmptyableCollection
-  (-empty [coll] (with-meta (.-EMPTY List) meta))
+  (-empty [coll] (.-EMPTY List))
 
   ISequential
   ISeq
   (-first [coll] (first s))
   (-rest  [coll]
-    (let [ret (create-array-node-seq nil nodes i (next s))]
+    (let [ret (create-array-node-seq nodes i (next s))]
       (if-not (nil? ret) ret ())))
 
   ISeqable
@@ -7166,18 +6739,18 @@ reduces them without incurring seq initialization"
 (es6-iterable ArrayNodeSeq)
 
 (defn- create-array-node-seq
-  ([nodes] (create-array-node-seq nil nodes 0 nil))
-  ([meta nodes i s]
+  ([nodes] (create-array-node-seq nodes 0 nil))
+  ([nodes i s]
      (if (nil? s)
        (let [len (alength nodes)]
          (loop [j i]
            (if (< j len)
              (if-let [nj (aget nodes j)]
                (if-let [ns (.inode-seq nj)]
-                 (ArrayNodeSeq. meta nodes (inc j) ns nil)
+                 (ArrayNodeSeq. nodes (inc j) ns nil)
                  (recur (inc j)))
                (recur (inc j))))))
-       (ArrayNodeSeq. meta nodes i s nil))))
+       (ArrayNodeSeq. nodes i s nil))))
 
 (declare TransientHashMap)
 
@@ -7193,10 +6766,8 @@ reduces them without incurring seq initialization"
       (.next root-iter)))
   (remove [_] (js/Error. "Unsupported operation")))
 
-(deftype PersistentHashMap [meta cnt root ^boolean has-nil? nil-val ^:mutable __hash]
+(deftype PersistentHashMap [cnt root ^boolean has-nil? nil-val ^:mutable __hash]
   Object
-  (toString [coll]
-    (pr-str* coll))
   (equiv [this other]
     (-equiv this other))
 
@@ -7216,7 +6787,7 @@ reduces them without incurring seq initialization"
       (f v k)))
 
   ICloneable
-  (-clone [_] (PersistentHashMap. meta cnt root has-nil? nil-val __hash))
+  (-clone [_] (PersistentHashMap. cnt root has-nil? nil-val __hash))
 
   IIterable
   (-iterator [coll]
@@ -7224,12 +6795,6 @@ reduces them without incurring seq initialization"
       (if has-nil?
         (HashMapIter. nil-val root-iter false)
         root-iter)))
-
-  IWithMeta
-  (-with-meta [coll meta] (PersistentHashMap. meta cnt root has-nil? nil-val __hash))
-
-  IMeta
-  (-meta [coll] meta)
 
   ICollection
   (-conj [coll entry]
@@ -7245,7 +6810,7 @@ reduces them without incurring seq initialization"
               (throw (js/Error. "conj on a map takes map entries or seqables of map entries"))))))))
 
   IEmptyableCollection
-  (-empty [coll] (-with-meta (.-EMPTY PersistentHashMap) meta))
+  (-empty [coll] (.-EMPTY PersistentHashMap))
 
   IEquiv
   (-equiv [coll other] (equiv-map coll other))
@@ -7280,7 +6845,7 @@ reduces them without incurring seq initialization"
     (if (nil? k)
       (if (and has-nil? (identical? v nil-val))
         coll
-        (PersistentHashMap. meta (if has-nil? cnt (inc cnt)) root true v nil))
+        (PersistentHashMap. (if has-nil? cnt (inc cnt)) root true v nil))
       (let [added-leaf? (Box. false)
             new-root    (-> (if (nil? root)
                               (.-EMPTY BitmapIndexedNode)
@@ -7288,7 +6853,7 @@ reduces them without incurring seq initialization"
                             (.inode-assoc 0 (hash k) k v added-leaf?))]
         (if (identical? new-root root)
           coll
-          (PersistentHashMap. meta (if ^boolean (.-val added-leaf?) (inc cnt) cnt) new-root has-nil? nil-val nil)))))
+          (PersistentHashMap. (if ^boolean (.-val added-leaf?) (inc cnt) cnt) new-root has-nil? nil-val nil)))))
 
   (-contains-key? [coll k]
     (cond (nil? k)    has-nil?
@@ -7299,14 +6864,14 @@ reduces them without incurring seq initialization"
   IMap
   (-dissoc [coll k]
     (cond (nil? k)    (if has-nil?
-                        (PersistentHashMap. meta (dec cnt) root false nil nil)
+                        (PersistentHashMap. (dec cnt) root false nil nil)
                         coll)
           (nil? root) coll
           :else
           (let [new-root (.inode-without root 0 (hash k) k)]
             (if (identical? new-root root)
               coll
-              (PersistentHashMap. meta (dec cnt) new-root has-nil? nil-val nil)))))
+              (PersistentHashMap. (dec cnt) new-root has-nil? nil-val nil)))))
 
   IKVReduce
   (-kv-reduce [coll f init]
@@ -7327,7 +6892,7 @@ reduces them without incurring seq initialization"
   (-as-transient [coll]
     (TransientHashMap. (js-obj) root cnt has-nil? nil-val)))
 
-(set! (.-EMPTY PersistentHashMap) (PersistentHashMap. nil 0 nil false nil empty-unordered-hash))
+(set! (.-EMPTY PersistentHashMap) (PersistentHashMap. 0 nil false nil empty-unordered-hash))
 
 (set! (.-fromArray PersistentHashMap)
   (fn [arr ^boolean no-clone]
@@ -7426,7 +6991,7 @@ reduces them without incurring seq initialization"
   (persistent! [tcoll]
     (if edit
       (do (set! edit nil)
-          (PersistentHashMap. nil count root has-nil? nil-val nil))
+          (PersistentHashMap. count root has-nil? nil-val nil))
       (throw (js/Error. "persistent! called twice"))))
 
   ICounted
@@ -7473,10 +7038,8 @@ reduces them without incurring seq initialization"
              (conj stack t))
       stack)))
 
-(deftype PersistentTreeMapSeq [meta stack ^boolean ascending? cnt ^:mutable __hash]
+(deftype PersistentTreeMapSeq [stack ^boolean ascending? cnt ^:mutable __hash]
   Object
-  (toString [coll]
-    (pr-str* coll))
   (equiv [this other]
     (-equiv this other))
   (indexOf [coll x]
@@ -7500,7 +7063,7 @@ reduces them without incurring seq initialization"
                                         (next stack)
                                         ascending?)]
       (if-not (nil? next-stack)
-        (PersistentTreeMapSeq. nil next-stack ascending? (dec cnt) nil)
+        (PersistentTreeMapSeq. next-stack ascending? (dec cnt) nil)
         ())))
 
   ICounted
@@ -7516,17 +7079,10 @@ reduces them without incurring seq initialization"
   (-conj [coll o] (cons o coll))
 
   IEmptyableCollection
-  (-empty [coll] (with-meta (.-EMPTY List) meta))
+  (-empty [coll] (.-EMPTY List))
 
   IHash
   (-hash [coll] (caching-hash coll hash-ordered-coll __hash))
-
-  IMeta
-  (-meta [coll] meta)
-
-  IWithMeta
-  (-with-meta [coll meta]
-    (PersistentTreeMapSeq. meta stack ascending? cnt __hash))
 
   IReduce
   (-reduce [coll f] (seq-reduce f coll))
@@ -7535,7 +7091,7 @@ reduces them without incurring seq initialization"
 (es6-iterable PersistentTreeMapSeq)
 
 (defn- create-tree-map-seq [tree ascending? cnt]
-  (PersistentTreeMapSeq. nil (tree-map-seq-push tree nil ascending?) ascending? cnt nil))
+  (PersistentTreeMapSeq. (tree-map-seq-push tree nil ascending?) ascending? cnt nil))
 
 (declare RedNode BlackNode)
 
@@ -7689,13 +7245,6 @@ reduces them without incurring seq initialization"
   IEquiv
   (-equiv [coll other] (equiv-sequential coll other))
 
-  IMeta
-  (-meta [node] nil)
-
-  IWithMeta
-  (-with-meta [node meta]
-    (with-meta [key val] meta))
-
   IStack
   (-peek [node] val)
 
@@ -7840,13 +7389,6 @@ reduces them without incurring seq initialization"
 
   IEquiv
   (-equiv [coll other] (equiv-sequential coll other))
-
-  IMeta
-  (-meta [node] nil)
-
-  IWithMeta
-  (-with-meta [node meta]
-    (with-meta [key val] meta))
 
   IStack
   (-peek [node] val)
@@ -8012,10 +7554,8 @@ reduces them without incurring seq initialization"
 
 (declare key)
 
-(deftype PersistentTreeMap [comp tree cnt meta ^:mutable __hash]
+(deftype PersistentTreeMap [comp tree cnt ^:mutable __hash]
   Object
-  (toString [coll]
-    (pr-str* coll))
   (equiv [this other]
     (-equiv this other))
 
@@ -8043,13 +7583,7 @@ reduces them without incurring seq initialization"
                 :else     (recur (.-right t)))))))
 
   ICloneable
-  (-clone [_] (PersistentTreeMap. comp tree cnt meta __hash))
-
-  IWithMeta
-  (-with-meta [coll meta] (PersistentTreeMap. comp tree cnt meta __hash))
-
-  IMeta
-  (-meta [coll] meta)
+  (-clone [_] (PersistentTreeMap. comp tree cnt __hash))
 
   ICollection
   (-conj [coll entry]
@@ -8065,7 +7599,7 @@ reduces them without incurring seq initialization"
               (throw (js/Error. "conj on a map takes map entries or seqables of map entries"))))))))
 
   IEmptyableCollection
-  (-empty [coll] (PersistentTreeMap. comp nil 0 meta 0))
+  (-empty [coll] (PersistentTreeMap. comp nil 0 0))
 
   IEquiv
   (-equiv [coll other] (equiv-map coll other))
@@ -8117,8 +7651,8 @@ reduces them without incurring seq initialization"
         (let [found-node (nth found 0)]
           (if (= v (.-val found-node))
             coll
-            (PersistentTreeMap. comp (tree-map-replace comp tree k v) cnt meta nil)))
-        (PersistentTreeMap. comp (.blacken t) (inc cnt) meta nil))))
+            (PersistentTreeMap. comp (tree-map-replace comp tree k v) cnt nil)))
+        (PersistentTreeMap. comp (.blacken t) (inc cnt) nil))))
 
   (-contains-key? [coll k]
     (not (nil? (.entry-at coll k))))
@@ -8130,8 +7664,8 @@ reduces them without incurring seq initialization"
       (if (nil? t)
         (if (nil? (nth found 0))
           coll
-          (PersistentTreeMap. comp nil 0 meta nil))
-        (PersistentTreeMap. comp (.blacken t) (dec cnt) meta nil))))
+          (PersistentTreeMap. comp nil 0 nil))
+        (PersistentTreeMap. comp (.blacken t) (dec cnt) nil))))
 
   ISorted
   (-sorted-seq [coll ascending?]
@@ -8144,7 +7678,7 @@ reduces them without incurring seq initialization"
         (if-not (nil? t)
           (let [c (comp k (.-key t))]
             (cond
-              (zero? c)  (PersistentTreeMapSeq. nil (conj stack t) ascending? -1 nil)
+              (zero? c)  (PersistentTreeMapSeq. (conj stack t) ascending? -1 nil)
               ascending? (if (neg? c)
                            (recur (conj stack t) (.-left t))
                            (recur stack          (.-right t)))
@@ -8152,13 +7686,13 @@ reduces them without incurring seq initialization"
                            (recur (conj stack t) (.-right t))
                            (recur stack          (.-left t)))))
           (when-not (nil? stack)
-            (PersistentTreeMapSeq. nil stack ascending? -1 nil))))))
+            (PersistentTreeMapSeq. stack ascending? -1 nil))))))
 
   (-entry-key [coll entry] (key entry))
 
   (-comparator [coll] comp))
 
-(set! (.-EMPTY PersistentTreeMap) (PersistentTreeMap. compare nil 0 nil empty-unordered-hash))
+(set! (.-EMPTY PersistentTreeMap) (PersistentTreeMap. compare nil 0 empty-unordered-hash))
 
 (es6-iterable PersistentTreeMap)
 
@@ -8180,19 +7714,6 @@ reduces them without incurring seq initialization"
               (into-array keyvals))]
     (.createAsIfByAssoc PersistentArrayMap arr true false)))
 
-(defn obj-map
-  "keyval => key val
-  Returns a new object map with supplied mappings."
-  [& keyvals]
-  (let [ks  (array)
-        obj (js-obj)]
-    (loop [kvs (seq keyvals)]
-      (if kvs
-        (do (.push ks (first kvs))
-            (aset obj (first kvs) (second kvs))
-            (recur (nnext kvs)))
-        (.fromObject ObjMap ks obj)))))
-
 (defn sorted-map
   "keyval => key val
   Returns a new sorted map with supplied mappings."
@@ -8207,15 +7728,13 @@ reduces them without incurring seq initialization"
   Returns a new sorted map with supplied mappings, using the supplied comparator."
   ([comparator & keyvals]
      (loop [in (seq keyvals)
-            out (PersistentTreeMap. (fn->comparator comparator) nil 0 nil 0)]
+            out (PersistentTreeMap. (fn->comparator comparator) nil 0 0)]
        (if in
          (recur (nnext in) (assoc out (first in) (second in)))
          out))))
 
-(deftype KeySeq [^not-native mseq _meta]
+(deftype KeySeq [^not-native mseq]
   Object
-  (toString [coll]
-    (pr-str* coll))
   (equiv [this other]
     (-equiv this other))
   (indexOf [coll x]
@@ -8226,12 +7745,6 @@ reduces them without incurring seq initialization"
     (-lastIndexOf coll x (count coll)))
   (lastIndexOf [coll x start]
     (-lastIndexOf coll x start))
-
-  IMeta
-  (-meta [coll] _meta)
-
-  IWithMeta
-  (-with-meta [coll new-meta] (KeySeq. mseq new-meta))
 
   ISeqable
   (-seq [coll] coll)
@@ -8245,7 +7758,7 @@ reduces them without incurring seq initialization"
     (cons o coll))
 
   IEmptyableCollection
-  (-empty [coll] (with-meta (.-EMPTY List) _meta))
+  (-empty [coll] (.-EMPTY List))
 
   IHash
   (-hash [coll] (hash-ordered-coll coll))
@@ -8260,7 +7773,7 @@ reduces them without incurring seq initialization"
                  (-next mseq)
                  (next mseq))]
       (if-not (nil? nseq)
-        (KeySeq. nseq _meta)
+        (KeySeq. nseq)
         ())))
 
   INext
@@ -8269,7 +7782,7 @@ reduces them without incurring seq initialization"
                  (-next mseq)
                  (next mseq))]
       (when-not (nil? nseq)
-        (KeySeq. nseq _meta))))
+        (KeySeq. nseq))))
 
   IReduce
   (-reduce [coll f] (seq-reduce f coll))
@@ -8281,17 +7794,15 @@ reduces them without incurring seq initialization"
   "Returns a sequence of the map's keys."
   [hash-map]
   (when-let [mseq (seq hash-map)]
-    (KeySeq. mseq nil)))
+    (KeySeq. mseq)))
 
 (defn key
   "Returns the key of the map entry."
   [map-entry]
   (-key map-entry))
 
-(deftype ValSeq [^not-native mseq _meta]
+(deftype ValSeq [^not-native mseq]
   Object
-  (toString [coll]
-    (pr-str* coll))
   (equiv [this other]
     (-equiv this other))
   (indexOf [coll x]
@@ -8302,12 +7813,6 @@ reduces them without incurring seq initialization"
     (-lastIndexOf coll x (count coll)))
   (lastIndexOf [coll x start]
     (-lastIndexOf coll x start))
-
-  IMeta
-  (-meta [coll] _meta)
-
-  IWithMeta
-  (-with-meta [coll new-meta] (ValSeq. mseq new-meta))
 
   ISeqable
   (-seq [coll] coll)
@@ -8321,7 +7826,7 @@ reduces them without incurring seq initialization"
     (cons o coll))
 
   IEmptyableCollection
-  (-empty [coll] (with-meta (.-EMPTY List) _meta))
+  (-empty [coll] (.-EMPTY List))
 
   IHash
   (-hash [coll] (hash-ordered-coll coll))
@@ -8336,7 +7841,7 @@ reduces them without incurring seq initialization"
                  (-next mseq)
                  (next mseq))]
       (if-not (nil? nseq)
-        (ValSeq. nseq _meta)
+        (ValSeq. nseq)
         ())))
 
   INext
@@ -8345,7 +7850,7 @@ reduces them without incurring seq initialization"
                  (-next mseq)
                  (next mseq))]
       (when-not (nil? nseq)
-        (ValSeq. nseq _meta))))
+        (ValSeq. nseq))))
 
   IReduce
   (-reduce [coll f] (seq-reduce f coll))
@@ -8357,7 +7862,7 @@ reduces them without incurring seq initialization"
   "Returns a sequence of the map's values."
   [hash-map]
   (when-let [mseq (seq hash-map)]
-    (ValSeq. mseq nil)))
+    (ValSeq. mseq)))
 
 (defn val
   "Returns the value in the map entry."
@@ -8400,7 +7905,7 @@ reduces them without incurring seq initialization"
              (assoc ret key entry)
              ret)
            (next keys)))
-        (with-meta ret (meta map)))))
+        ret)))
 
 ;;; PersistentHashSet
 
@@ -8416,10 +7921,8 @@ reduces them without incurring seq initialization"
       (throw (js/Error. "No such element"))))
   (remove [_] (js/Error. "Unsupported operation")))
 
-(deftype PersistentHashSet [meta hash-map ^:mutable __hash]
+(deftype PersistentHashSet [hash-map ^:mutable __hash]
   Object
-  (toString [coll]
-    (pr-str* coll))
   (equiv [this other]
     (-equiv this other))
 
@@ -8437,24 +7940,18 @@ reduces them without incurring seq initialization"
       (f v k)))
 
   ICloneable
-  (-clone [_] (PersistentHashSet. meta hash-map __hash))
+  (-clone [_] (PersistentHashSet. hash-map __hash))
 
   IIterable
   (-iterator [coll]
     (HashSetIter. (-iterator hash-map)))
 
-  IWithMeta
-  (-with-meta [coll meta] (PersistentHashSet. meta hash-map __hash))
-
-  IMeta
-  (-meta [coll] meta)
-
   ICollection
   (-conj [coll o]
-    (PersistentHashSet. meta (assoc hash-map o nil) nil))
+    (PersistentHashSet. (assoc hash-map o nil) nil))
 
   IEmptyableCollection
-  (-empty [coll] (with-meta (.-EMPTY PersistentHashSet) meta))
+  (-empty [coll] (.-EMPTY PersistentHashSet))
 
   IEquiv
   (-equiv [coll other]
@@ -8483,7 +7980,7 @@ reduces them without incurring seq initialization"
 
   ISet
   (-disjoin [coll v]
-    (PersistentHashSet. meta (-dissoc hash-map v) nil))
+    (PersistentHashSet. (-dissoc hash-map v) nil))
 
   IFn
   (-invoke [coll k]
@@ -8495,7 +7992,7 @@ reduces them without incurring seq initialization"
   (-as-transient [coll] (TransientHashSet. (-as-transient hash-map))))
 
 (set! (.-EMPTY PersistentHashSet)
-  (PersistentHashSet. nil (.-EMPTY PersistentArrayMap) empty-unordered-hash))
+  (PersistentHashSet. (.-EMPTY PersistentArrayMap) empty-unordered-hash))
 
 (set! (.-fromArray PersistentHashSet)
   (fn [items ^boolean no-clone]
@@ -8506,7 +8003,7 @@ reduces them without incurring seq initialization"
                  out (transient (.-EMPTY PersistentArrayMap))]
             (if (< i len)
               (recur (inc i) (-assoc! out (aget items i) nil))
-              (PersistentHashSet. nil (-persistent! out) nil))))
+              (PersistentHashSet. (-persistent! out) nil))))
        (loop [i 0
               out (transient (.-EMPTY PersistentHashSet))]
          (if (< i len)
@@ -8539,7 +8036,7 @@ reduces them without incurring seq initialization"
     tcoll)
 
   (-persistent! [tcoll]
-    (PersistentHashSet. nil (persistent! transient-map) nil))
+    (PersistentHashSet. (persistent! transient-map) nil))
 
   ITransientSet
   (-disjoin! [tcoll v]
@@ -8569,10 +8066,8 @@ reduces them without incurring seq initialization"
       not-found
       k)))
 
-(deftype PersistentTreeSet [meta tree-map ^:mutable __hash]
+(deftype PersistentTreeSet [tree-map ^:mutable __hash]
   Object
-  (toString [coll]
-    (pr-str* coll))
   (equiv [this other]
     (-equiv this other))
 
@@ -8590,20 +8085,14 @@ reduces them without incurring seq initialization"
       (f v k)))
 
   ICloneable
-  (-clone [_] (PersistentTreeSet. meta tree-map __hash))
-
-  IWithMeta
-  (-with-meta [coll meta] (PersistentTreeSet. meta tree-map __hash))
-
-  IMeta
-  (-meta [coll] meta)
+  (-clone [_] (PersistentTreeSet. tree-map __hash))
 
   ICollection
   (-conj [coll o]
-    (PersistentTreeSet. meta (assoc tree-map o nil) nil))
+    (PersistentTreeSet. (assoc tree-map o nil) nil))
 
   IEmptyableCollection
-  (-empty [coll] (PersistentTreeSet. meta (-empty tree-map) 0))
+  (-empty [coll] (PersistentTreeSet. (-empty tree-map) 0))
 
   IEquiv
   (-equiv [coll other]
@@ -8649,7 +8138,7 @@ reduces them without incurring seq initialization"
 
   ISet
   (-disjoin [coll v]
-    (PersistentTreeSet. meta (dissoc tree-map v) nil))
+    (PersistentTreeSet. (dissoc tree-map v) nil))
 
   IFn
   (-invoke [coll k]
@@ -8658,7 +8147,7 @@ reduces them without incurring seq initialization"
     (-lookup coll k not-found)))
 
 (set! (.-EMPTY PersistentTreeSet)
-  (PersistentTreeSet. nil (.-EMPTY PersistentTreeMap) empty-unordered-hash))
+  (PersistentTreeSet. (.-EMPTY PersistentTreeMap) empty-unordered-hash))
 
 (es6-iterable PersistentTreeSet)
 
@@ -8700,7 +8189,7 @@ reduces them without incurring seq initialization"
   "Returns a new sorted set with supplied keys, using the supplied comparator."
   ([comparator & keys]
    (reduce -conj
-           (PersistentTreeSet. nil (sorted-map-by comparator) 0)
+           (PersistentTreeSet. (sorted-map-by comparator) 0)
            keys)))
 
 (defn replace
@@ -8897,10 +8386,8 @@ reduces them without incurring seq initialization"
       (set! i (+ i step))
       ret)))
 
-(deftype Range [meta start end step ^:mutable __hash]
+(deftype Range [start end step ^:mutable __hash]
   Object
-  (toString [coll]
-    (pr-str* coll))
   (equiv [this other]
     (-equiv this other))
   (indexOf [coll x]
@@ -8913,13 +8400,7 @@ reduces them without incurring seq initialization"
     (-lastIndexOf coll x start))
 
   ICloneable
-  (-clone [_] (Range. meta start end step __hash))
-
-  IWithMeta
-  (-with-meta [rng meta] (Range. meta start end step __hash))
-
-  IMeta
-  (-meta [rng] meta)
+  (-clone [_] (Range. start end step __hash))
 
   ISeqable
   (-seq [rng]
@@ -8933,7 +8414,7 @@ reduces them without incurring seq initialization"
     (when-not (nil? (-seq rng)) start))
   (-rest [rng]
     (if-not (nil? (-seq rng))
-      (Range. meta (+ start step) end step nil)
+      (Range. (+ start step) end step nil)
       ()))
 
   IIterable
@@ -8944,15 +8425,15 @@ reduces them without incurring seq initialization"
   (-next [rng]
     (if (pos? step)
       (when (< (+ start step) end)
-        (Range. meta (+ start step) end step nil))
+        (Range. (+ start step) end step nil))
       (when (> (+ start step) end)
-        (Range. meta (+ start step) end step nil))))
+        (Range. (+ start step) end step nil))))
 
   ICollection
   (-conj [rng o] (cons o rng))
 
   IEmptyableCollection
-  (-empty [rng] (with-meta (.-EMPTY List) meta))
+  (-empty [rng] (.-EMPTY List))
 
   ISequential
   IEquiv
@@ -9001,7 +8482,7 @@ reduces them without incurring seq initialization"
   ([] (range 0 (.-MAX_VALUE js/Number) 1))
   ([end] (range 0 end 1))
   ([start end] (range start end 1))
-  ([start end step] (Range. nil start end step nil)))
+  ([start end step] (Range. start end step nil)))
 
 (defn take-nth
   "Returns a lazy seq of every nth item in coll.  Returns a stateful
@@ -9264,84 +8745,74 @@ reduces them without incurring seq initialization"
 
 (declare print-map)
 
-(defn ^boolean print-meta? [opts obj]
-  (and (boolean (get opts :meta))
-       (implements? IMeta obj)
-       (not (nil? (meta obj)))))
-
 (defn- pr-writer-impl
   [obj writer opts]
   (cond
     (nil? obj) (-write writer "nil")
     :else
-    (do
-      (when (print-meta? opts obj)
-        (-write writer "^")
-        (pr-writer (meta obj) writer opts)
-        (-write writer " "))
-      (cond
-        ;; handle CLJS ctors
-        ^boolean (.-cljs$lang$type obj)
-        (.cljs$lang$ctorPrWriter obj obj writer opts)
+    (cond
+      ;; handle CLJS ctors
+      ^boolean (.-cljs$lang$type obj)
+      (.cljs$lang$ctorPrWriter obj obj writer opts)
 
-        ; Use the new, more efficient, IPrintWithWriter interface when possible.
-        (implements? IPrintWithWriter obj)
-        (-pr-writer ^not-native obj writer opts)
+                                        ; Use the new, more efficient, IPrintWithWriter interface when possible.
+      (implements? IPrintWithWriter obj)
+      (-pr-writer ^not-native obj writer opts)
 
-        (or (true? obj) (false? obj) (number? obj))
-        (-write writer (str obj))
+      (or (true? obj) (false? obj) (number? obj))
+      (-write writer (str obj))
 
-        (object? obj)
-        (do
-          (-write writer "#js ")
-          (print-map
-            (map (fn [k] [(keyword k) (aget obj k)]) (js-keys obj))
-            pr-writer writer opts))
+      (object? obj)
+      (do
+        (-write writer "#js ")
+        (print-map
+         (map (fn [k] [(keyword k) (aget obj k)]) (js-keys obj))
+         pr-writer writer opts))
 
-        (array? obj)
-        (pr-sequential-writer writer pr-writer "#js [" " " "]" opts obj)
+      (array? obj)
+      (pr-sequential-writer writer pr-writer "#js [" " " "]" opts obj)
 
-        ^boolean (goog/isString obj)
-        (if (:readably opts)
-          (-write writer (quote-string obj))
-          (-write writer obj))
+      ^boolean (goog/isString obj)
+      (if (:readably opts)
+        (-write writer (quote-string obj))
+        (-write writer obj))
 
-        ^boolean (goog/isFunction obj)
-        (let [name (.-name obj)
+      ^boolean (goog/isFunction obj)
+      (let [name (.-name obj)
+            name (if (or (nil? name) (gstring/isEmpty name))
+                   "Function"
+                   name)]
+        (write-all writer "#object[" name " \"" (str obj) "\"]"))
+
+      (instance? js/Date obj)
+      (let [normalize (fn [n len]
+                        (loop [ns (str n)]
+                          (if (< (count ns) len)
+                            (recur (str "0" ns))
+                            ns)))]
+        (write-all writer
+                   "#inst \""
+                   (str (.getUTCFullYear obj))             "-"
+                   (normalize (inc (.getUTCMonth obj)) 2)  "-"
+                   (normalize (.getUTCDate obj) 2)         "T"
+                   (normalize (.getUTCHours obj) 2)        ":"
+                   (normalize (.getUTCMinutes obj) 2)      ":"
+                   (normalize (.getUTCSeconds obj) 2)      "."
+                   (normalize (.getUTCMilliseconds obj) 3) "-"
+                   "00:00\""))
+
+      (regexp? obj) (write-all writer "#\"" (.-source obj) "\"")
+
+      :else
+      (if (.. obj -constructor -cljs$lang$ctorStr)
+        (write-all writer
+                   "#object[" (.replace (.. obj -constructor -cljs$lang$ctorStr)
+                                        (js/RegExp. "/" "g") ".") "]")
+        (let [name (.. obj -constructor -name)
               name (if (or (nil? name) (gstring/isEmpty name))
-                     "Function"
+                     "Object"
                      name)]
-          (write-all writer "#object[" name " \"" (str obj) "\"]"))
-
-        (instance? js/Date obj)
-        (let [normalize (fn [n len]
-                          (loop [ns (str n)]
-                            (if (< (count ns) len)
-                              (recur (str "0" ns))
-                              ns)))]
-          (write-all writer
-            "#inst \""
-            (str (.getUTCFullYear obj))             "-"
-            (normalize (inc (.getUTCMonth obj)) 2)  "-"
-            (normalize (.getUTCDate obj) 2)         "T"
-            (normalize (.getUTCHours obj) 2)        ":"
-            (normalize (.getUTCMinutes obj) 2)      ":"
-            (normalize (.getUTCSeconds obj) 2)      "."
-            (normalize (.getUTCMilliseconds obj) 3) "-"
-            "00:00\""))
-
-        (regexp? obj) (write-all writer "#\"" (.-source obj) "\"")
-
-        :else
-        (if (.. obj -constructor -cljs$lang$ctorStr)
-          (write-all writer
-            "#object[" (.replace (.. obj -constructor -cljs$lang$ctorStr)
-                         (js/RegExp. "/" "g") ".") "]")
-          (let [name (.. obj -constructor -name)
-               name (if (or (nil? name) (gstring/isEmpty name))
-                      "Object"
-                      name)]
-           (write-all writer "#object[" name " " (str obj) "]")))))))
+          (write-all writer "#object[" name " " (str obj) "]"))))))
 
 (defn- pr-writer
   "Prefer this to pr-seq, because it makes the printing function
@@ -9483,7 +8954,7 @@ reduces them without incurring seq initialization"
       (print-prefix-map (str "#:" ns) lift-map print-one writer opts)
       (print-prefix-map nil m print-one writer opts))))
 
-(extend-protocol IPrintWithWriter
+#_(extend-protocol IPrintWithWriter
   LazySeq
   (-pr-writer [coll writer opts] (pr-sequential-writer writer pr-writer "(" " " ")" opts coll))
 
@@ -9537,10 +9008,6 @@ reduces them without incurring seq initialization"
 
   RedNode
   (-pr-writer [coll writer opts] (pr-sequential-writer writer pr-writer "[" " " "]" opts coll))
-
-  ObjMap
-  (-pr-writer [coll writer opts]
-    (print-map coll pr-writer writer opts))
 
   KeySeq
   (-pr-writer [coll writer opts] (pr-sequential-writer writer pr-writer "(" " " ")" opts coll))
@@ -9619,20 +9086,6 @@ reduces them without incurring seq initialization"
       (throw (js/Error. (str "Cannot compare " x " to " y))))))
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;; Reference Types ;;;;;;;;;;;;;;;;
-
-(defn alter-meta!
-  "Atomically sets the metadata for a namespace/var/ref/agent/atom to be:
-
-  (apply f its-current-meta args)
-
-  f must be free of side-effects"
-  [iref f & args]
-  (set! (.-meta iref) (apply f (.-meta iref) args)))
-
-(defn reset-meta!
-  "Atomically resets the metadata for an atom"
-  [iref m]
-  (set! (.-meta iref) m))
 
 (defn add-watch
   "Adds a watch function to an atom reference. The watch fn must be a
@@ -10371,7 +9824,6 @@ reduces them without incurring seq initialization"
   IUUID
 
   Object
-  (toString [_] uuid)
   (equiv [this other]
     (-equiv this other))
 
@@ -10508,10 +9960,7 @@ reduces them without incurring seq initialization"
 
 
 (deftype TaggedLiteral [tag form]
-  Object
-  (toString [coll]
-    (pr-str* coll))
-
+  
   IEquiv
   (-equiv [this other]
     (and (instance? TaggedLiteral other)
@@ -10656,10 +10105,8 @@ reduces them without incurring seq initialization"
       (when ^boolean (gobject/containsKey obj k)
         (let [var-sym (symbol (str name) (str sym))
               var-meta {:ns this}]
-          (Var. (ns-lookup obj k) var-sym var-meta)))))
+          (Var. (ns-lookup obj k) var-sym)))))
   (getName [_] name)
-  (toString [_]
-    (str name))
   IEquiv
   (-equiv [_ other]
     (if (instance? Namespace other)
@@ -10711,7 +10158,7 @@ reduces them without incurring seq initialization"
               (let [var-sym (symbol (demunge k))]
                 (assoc ret
                   var-sym (Var. #(gobject/get ns-obj k)
-                            (symbol (str sym) (str var-sym)) {:ns ns}))))]
+                                (symbol (str sym) (str var-sym))))))]
       (reduce step {} (js-keys ns-obj)))))
 
 (defn create-ns
@@ -10757,3 +10204,6 @@ reduces them without incurring seq initialization"
   "Bootstrap only."
   [ns-obj]
   (.-name ns-obj))
+
+;; No meta, No IReset, No ISwap, No toString
+;; 88K
